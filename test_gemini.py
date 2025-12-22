@@ -13,7 +13,7 @@ import os
 # 1. 配置 (Configuration)
 # ==========================================
 # 依然需要填入你的 API Key
-my_api_key = "AIzaSyDRVcCJz5X7V7SflRNjCQJ-gZ0Fvg13bl0"
+my_api_key = ""
 
 # ==========================================
 # 2. 初始化客户端 (Client Instantiation)
