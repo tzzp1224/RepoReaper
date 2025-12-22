@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>GitHub AI Agent</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+        #logs { background: #f4f4f4; padding: 1rem; border-radius: 8px; height: 150px; overflow-y: auto; font-family: monospace; }
+        #report { margin-top: 2rem; white-space: pre-wrap; line-height: 1.6; }
+        .step { color: #666; margin-bottom: 0.5rem; }
+        .highlight { color: #007bff; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>🕵️ GitHub Agent Dashboard</h1>
+    <input type="text" id="repoUrl" value="https://github.com/fastapi/fastapi" style="width: 70%; padding: 0.5rem;">
+    <button onclick="startAnalysis()" style="padding: 0.5rem 1rem; cursor: pointer;">开始分析</button>
+    
+    <h3>🚀 运行日志 (Logs)</h3>
+    <div id="logs">等待开始...</div>
+
+    <h3>📝 分析报告 (Report)</h3>
+    <div id="report"></div>
+
+    <script>
+        function startAnalysis() {
+            const url = document.getElementById('repoUrl').value;
+            const logDiv = document.getElementById('logs');
+            const reportDiv = document.getElementById('report');
+            
+            logDiv.innerHTML = "";
+            reportDiv.innerHTML = "正在连接 Agent...";
+            
+            // ⭐️ 核心技术：EventSource (SSE)
+            // 连接 FastAPI 的流式接口
+            const eventSource = new EventSource(`http://127.0.0.1:8000/analyze?url=${encodeURIComponent(url)}`);
+
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                
+                if (data.step === 'report_chunk') {
+                    // 如果是报告片段，追加到报告区域
+                    if (reportDiv.innerHTML === "正在连接 Agent...") reportDiv.innerHTML = "";
+                    reportDiv.innerHTML += data.chunk;
+                } else if (data.step === 'finish') {
+                    logDiv.innerHTML += `<div class="step">✅ <b>Done</b></div>`;
+                    eventSource.close(); // 关闭连接
+                } else if (data.step === 'error') {
+                    logDiv.innerHTML += `<div class="step" style="color:red">❌ ${data.message}</div>`;
+                    eventSource.close();
+                } else {
+                    // 如果是普通日志
+                    logDiv.innerHTML += `<div class="step">👉 ${data.message}</div>`;
+                    logDiv.scrollTop = logDiv.scrollHeight; // 自动滚动到底部
+                }
+            };
+
+            eventSource.onerror = function(err) {
+                console.error("EventSource failed:", err);
+                eventSource.close();
+            };
+        }
+    </script>
+</body>
+</html>

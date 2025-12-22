@@ -1,63 +1,149 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>GitHub AI Agent</title>
+    <title>GitHub RAG Agent</title>
     <style>
-        body { font-family: sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
-        #logs { background: #f4f4f4; padding: 1rem; border-radius: 8px; height: 150px; overflow-y: auto; font-family: monospace; }
-        #report { margin-top: 2rem; white-space: pre-wrap; line-height: 1.6; }
-        .step { color: #666; margin-bottom: 0.5rem; }
-        .highlight { color: #007bff; font-weight: bold; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #333; }
+        h1 { border-bottom: 2px solid #eee; padding-bottom: 0.5rem; }
+        
+        /* 布局 */
+        .container { display: flex; gap: 20px; }
+        .left-panel { flex: 2; }
+        .right-panel { flex: 1; border-left: 1px solid #eee; padding-left: 20px; display: flex; flex-direction: column; height: 80vh; }
+
+        /* 组件样式 */
+        input[type="text"] { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;}
+        button { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; }
+
+        #logs { background: #f8f9fa; padding: 1rem; border-radius: 8px; height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.9rem; margin-bottom: 1rem;}
+        #report { background: white; padding: 1rem; border: 1px solid #eee; border-radius: 8px; min-height: 200px; white-space: pre-wrap; line-height: 1.6; }
+        
+        /* 聊天部分 */
+        #chat-history { flex: 1; overflow-y: auto; border: 1px solid #eee; border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #fff; }
+        .msg { margin-bottom: 10px; padding: 8px 12px; border-radius: 12px; max-width: 85%; font-size: 0.9rem; }
+        .msg.user { background: #007bff; color: white; align-self: flex-end; margin-left: auto; }
+        .msg.ai { background: #f1f0f0; color: #333; }
+        .source-tag { font-size: 0.75rem; color: #666; margin-top: 4px; font-style: italic; }
     </style>
 </head>
 <body>
-    <h1>🕵️ GitHub Agent Dashboard</h1>
-    <input type="text" id="repoUrl" value="https://github.com/fastapi/fastapi" style="width: 70%; padding: 0.5rem;">
-    <button onclick="startAnalysis()" style="padding: 0.5rem 1rem; cursor: pointer;">开始分析</button>
+    <h1>🧠 GitHub RAG Agent (Chat with Code)</h1>
     
-    <h3>🚀 运行日志 (Logs)</h3>
-    <div id="logs">等待开始...</div>
+    <div class="container">
+        <div class="left-panel">
+            <h3>1. 项目分析 (Indexing)</h3>
+            <div style="display: flex; gap: 10px;">
+                <input type="text" id="repoUrl" value="https://github.com/fastapi/fastapi" placeholder="GitHub URL...">
+                <button onclick="startAnalysis()" id="btn-analyze">开始分析</button>
+            </div>
+            
+            <div id="logs">Waiting to analyze...</div>
+            <div id="report">报告将在这里生成...</div>
+        </div>
 
-    <h3>📝 分析报告 (Report)</h3>
-    <div id="report"></div>
+        <div class="right-panel">
+            <h3>2. 智能问答 (Chat)</h3>
+            <div id="chat-history">
+                <div class="msg ai">你好！请先点击左侧“开始分析”，等我读完代码后，你就可以问我关于代码的问题了。</div>
+            </div>
+            <div style="display: flex; gap: 5px;">
+                <input type="text" id="chatInput" placeholder="例如：鉴权逻辑在哪里？" onkeypress="handleKeyPress(event)">
+                <button onclick="sendChat()" id="btn-chat" disabled>发送</button>
+            </div>
+        </div>
+    </div>
 
     <script>
+        // --- 分析功能 ---
         function startAnalysis() {
             const url = document.getElementById('repoUrl').value;
             const logDiv = document.getElementById('logs');
             const reportDiv = document.getElementById('report');
+            const btnAnalyze = document.getElementById('btn-analyze');
+            const btnChat = document.getElementById('btn-chat');
             
+            // 重置状态
             logDiv.innerHTML = "";
-            reportDiv.innerHTML = "正在连接 Agent...";
-            
-            // ⭐️ 核心技术：EventSource (SSE)
-            // 连接 FastAPI 的流式接口
+            reportDiv.innerHTML = "";
+            btnAnalyze.disabled = true;
+            btnChat.disabled = true; // 分析中禁止聊天
+
             const eventSource = new EventSource(`http://127.0.0.1:8000/analyze?url=${encodeURIComponent(url)}`);
 
             eventSource.onmessage = function(event) {
                 const data = JSON.parse(event.data);
                 
                 if (data.step === 'report_chunk') {
-                    // 如果是报告片段，追加到报告区域
-                    if (reportDiv.innerHTML === "正在连接 Agent...") reportDiv.innerHTML = "";
                     reportDiv.innerHTML += data.chunk;
                 } else if (data.step === 'finish') {
-                    logDiv.innerHTML += `<div class="step">✅ <b>Done</b></div>`;
-                    eventSource.close(); // 关闭连接
-                } else if (data.step === 'error') {
-                    logDiv.innerHTML += `<div class="step" style="color:red">❌ ${data.message}</div>`;
+                    logDiv.innerHTML += `<div style="color:green">✅ ${data.message}</div>`;
                     eventSource.close();
+                    btnAnalyze.disabled = false;
+                    btnChat.disabled = false; // 允许聊天
+                    addMsg("ai", "我已经读完代码了，现在你可以问我任何问题！");
+                } else if (data.step === 'error') {
+                    logDiv.innerHTML += `<div style="color:red">❌ ${data.message}</div>`;
+                    eventSource.close();
+                    btnAnalyze.disabled = false;
                 } else {
-                    // 如果是普通日志
-                    logDiv.innerHTML += `<div class="step">👉 ${data.message}</div>`;
-                    logDiv.scrollTop = logDiv.scrollHeight; // 自动滚动到底部
+                    logDiv.innerHTML += `<div>👉 ${data.message}</div>`;
+                    logDiv.scrollTop = logDiv.scrollHeight;
                 }
             };
+        }
 
-            eventSource.onerror = function(err) {
-                console.error("EventSource failed:", err);
-                eventSource.close();
-            };
+        // --- 聊天功能 ---
+        async function sendChat() {
+            const input = document.getElementById('chatInput');
+            const history = document.getElementById('chat-history');
+            const query = input.value.trim();
+            if (!query) return;
+
+            // 显示用户问题
+            addMsg("user", query);
+            input.value = "";
+
+            // 显示 AI 思考中
+            const loadingId = addMsg("ai", "🤔 正在检索代码库...");
+
+            try {
+                const res = await fetch("http://127.0.0.1:8000/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ query: query })
+                });
+                const data = await res.json();
+                
+                // 移除思考中，显示真实答案
+                document.getElementById(loadingId).remove();
+                
+                let answerHtml = data.answer;
+                if (data.sources && data.sources.length > 0) {
+                    answerHtml += `<div class="source-tag">参考文件: ${data.sources.join(", ")}</div>`;
+                }
+                addMsg("ai", answerHtml, true);
+
+            } catch (err) {
+                addMsg("ai", "❌ 出错了: " + err.message);
+            }
+        }
+
+        function addMsg(role, text, isHtml=false) {
+            const history = document.getElementById('chat-history');
+            const div = document.createElement('div');
+            div.className = `msg ${role}`;
+            div.id = "msg-" + Date.now();
+            if (isHtml) div.innerHTML = text;
+            else div.textContent = text;
+            history.appendChild(div);
+            history.scrollTop = history.scrollHeight;
+            return div.id;
+        }
+
+        function handleKeyPress(e) {
+            if (e.key === 'Enter') sendChat();
         }
     </script>
 </body>

@@ -1,35 +1,26 @@
 import sys
-import os
 import io
 import json
 import asyncio
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
-from dotenv import load_dotenv
 from google import genai
+from dotenv import load_dotenv
+import os
 
 # 引入之前的工具
 from tools_github import get_repo_structure, get_file_content
+# 引入新写的向量库
+from vector_store import VectorStore
 
-# ==========================================
-# 配置
-# ==========================================
 load_dotenv()
-
-# 读取 Key
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-if not GEMINI_API_KEY:
-    raise ValueError("❌ 未找到 GEMINI_API_KEY，请检查 .env 文件")
-
 client = genai.Client(api_key=GEMINI_API_KEY)
-
-MODEL_NAME = "gemini-3-flash-preview" # 或 gemini-1.5-flash-001
+MODEL_NAME = "gemini-3-flash-preview"
 
 app = FastAPI()
 
-# 允许跨域 (前端开发必备)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,44 +28,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 🌎 全局唯一的向量数据库实例
+# 注意：每次重启服务，内存数据库会清空，需要重新分析一次仓库
+vector_db = VectorStore()
+
 # ==========================================
-# 核心逻辑：把 Agent 变成一个生成器
+# 1. 分析流程 (Indexing)
 # ==========================================
 async def agent_stream(repo_url: str):
-    """
-    这是一个异步生成器 (Async Generator)。
-    它不会一次性返回结果，而是像流水线一样，
-    每做完一步，就用 yield 抛出一个 JSON 消息给前端。
-    """
-    
-    # --- Step 1: 初始化 ---
     yield json.dumps({"step": "init", "message": f"🚀 正在连接 GitHub: {repo_url}..."})
-    await asyncio.sleep(0.5) # 模拟一点延迟感
+    await asyncio.sleep(0.5)
     
     try:
+        # 重置数据库 (避免混淆不同项目)
+        # 简单起见，我们这里重新实例化一个，或者你可以写个 clear 方法
+        global vector_db
+        vector_db = VectorStore() 
+
         file_list = get_repo_structure(repo_url)
         if not file_list:
-            yield json.dumps({"step": "error", "message": "❌ 无法获取文件列表，请检查 URL 或 Token。"})
+            yield json.dumps({"step": "error", "message": "❌ 无法获取文件列表。"})
             return
 
-        yield json.dumps({"step": "fetched", "message": f"📦 获取成功！共发现 {len(file_list)} 个核心文件。"})
+        yield json.dumps({"step": "fetched", "message": f"📦 获取成功！共发现 {len(file_list)} 个文件。"})
         
         # 截取
-        limit = 500
+        limit = 400
         file_list_str = "\n".join(file_list[:limit])
 
-        # --- Step 2: 思考 (Gemini) ---
-        yield json.dumps({"step": "thinking", "message": "🤖 Gemini 正在阅读目录，思考阅读哪些核心代码..."})
-        
+        # Step 2: 思考
+        yield json.dumps({"step": "thinking", "message": "🤖 Gemini 正在挑选核心代码..."})
         selection_prompt = f"""
         You are a Senior Software Architect.
-        Repo Structure (Truncated): {file_list_str}
-        Identify top 3 critical files to understand the architecture.
+        Repo Structure: {file_list_str}
+        Identify top 3-5 critical files to understand the logic.
         Return raw JSON list. Example: ["README.md", "main.py"]
         """
-        
-        # 这里用同步调用即可，因为是在线程池里跑，或者换成 async 版本
-        # 为了演示简单，我们假设它是极快的
         response = client.models.generate_content(model=MODEL_NAME, contents=selection_prompt)
         
         selected_files = ["README.md"]
@@ -84,72 +73,107 @@ async def agent_stream(repo_url: str):
         except:
             pass
 
-        yield json.dumps({"step": "plan", "message": f"🎯 决定深入分析以下文件: {selected_files}"})
+        yield json.dumps({"step": "plan", "message": f"🎯 决定读取: {selected_files}"})
         
-        # --- Step 3: 下载与分析 ---
+        # Step 3: 下载 + 建库 (Indexing)
         code_context = ""
+        documents = []
+        metadatas = []
+
         for i, file_path in enumerate(selected_files):
-            yield json.dumps({"step": "download", "message": f"📥 [{i+1}/{len(selected_files)}] 正在读取: {file_path}..."})
+            yield json.dumps({"step": "download", "message": f"📥 [{i+1}/{len(selected_files)}] 读取并存入知识库: {file_path}..."})
             content = get_file_content(repo_url, file_path)
             if content:
-                code_context += f"\n\n=== FILE: {file_path} ===\n{content[:10000]}"
+                # 简单处理：把整个文件当做一个 chunk (实际 RAG 中会按字符切分)
+                # 为了防止文件太大，我们截取前 8000 字符
+                snippet = content[:8000]
+                documents.append(snippet)
+                metadatas.append({"file": file_path})
+                
+                # 拼接用于生成总结
+                code_context += f"\n\n=== FILE: {file_path} ===\n{snippet}"
         
-        # --- Step 4: 生成报告 (Stream) ---
-        yield json.dumps({"step": "generating", "message": "📝 正在撰写最终技术报告..."})
+        # ⭐️ 核心动作：存入向量数据库
+        yield json.dumps({"step": "indexing", "message": "🧠 正在构建 RAG 向量索引..."})
+        vector_db.add_documents(documents, metadatas)
+
+        # Step 4: 生成报告
+        yield json.dumps({"step": "generating", "message": "📝 正在撰写分析报告..."})
         
         analysis_prompt = f"""
         You are a Tech Lead.
         Based on these files: {code_context}
-        Write a concise technical report (in Chinese).
-        Use Markdown formatting.
+        Write a concise technical report (in Chinese). Markdown format.
         """
-
-        # ⭐️ 关键点：使用 stream=True 开启流式生成
-        # 这样 Agent 打出一个字，前端就能显示一个字
-        stream_response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=analysis_prompt,
-            config={"response_mime_type": "text/plain"}, # 确保不是JSON
+        
+        final_response = client.models.generate_content(
+            model=MODEL_NAME, contents=analysis_prompt
         )
         
-        # 注意：Google SDK 的 stream 用法可能需要适配
-        # 这里我们简单做，如果 SDK 不支持 async stream，我们先一次性返回
-        # 为了展示含金量，我们这里模拟流式推送 (或者你可以查阅 SDK 文档实现真流式)
-        
-        final_text = stream_response.text
-        
-        # 模拟打字机效果 (让前端看起来像是在实时生成)
+        # 模拟流式推送
+        final_text = final_response.text
         chunk_size = 50
         for i in range(0, len(final_text), chunk_size):
             chunk = final_text[i:i+chunk_size]
             yield json.dumps({"step": "report_chunk", "chunk": chunk})
-            await asyncio.sleep(0.1) 
+            await asyncio.sleep(0.05) 
 
-        yield json.dumps({"step": "finish", "message": "✅ 分析完成"})
+        yield json.dumps({"step": "finish", "message": "✅ 分析完成！现在你可以向我提问了。"})
 
     except Exception as e:
-        yield json.dumps({"step": "error", "message": f"💥 发生错误: {str(e)}"})
+        yield json.dumps({"step": "error", "message": f"💥 错误: {str(e)}"})
 
 # ==========================================
-# 路由 (API Endpoints)
+# 2. 聊天接口 (Retrieval & Chat)
 # ==========================================
+class ChatRequest(json.JSONEncoder):
+    # Pydantic 也可以，这里偷懒用 dict
+    pass
 
-@app.get("/")
-def home():
-    return {"status": "Agent Service is Running"}
+@app.post("/chat")
+async def chat(request: Request):
+    data = await request.json()
+    user_query = data.get("query")
+    
+    if not user_query:
+        return {"answer": "请输入问题"}
+
+    print(f"User asked: {user_query}")
+
+    # 1. 检索 (Retrieval)
+    # 去向量库里找 3 个最相关的代码片段
+    relevant_docs = vector_db.search(user_query, top_k=3)
+    
+    context_str = ""
+    for doc in relevant_docs:
+        context_str += f"\n--- 片段来自 {doc['file']} ---\n{doc['content'][:1000]}...\n"
+
+    # 2. 增强生成 (Generation)
+    prompt = f"""
+    你是一个精通代码的 AI 助手。
+    根据以下检索到的代码上下文 (Context)，回答用户的问题。
+    如果上下文中没有答案，请诚实地说不知道，不要编造。
+
+    === Context ===
+    {context_str}
+
+    === Question ===
+    {user_query}
+    """
+
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt
+        )
+        return {"answer": response.text, "sources": [d['file'] for d in relevant_docs]}
+    except Exception as e:
+        return {"answer": f"抱歉，思考时出错了: {str(e)}"}
 
 @app.get("/analyze")
 async def analyze(url: str):
-    """
-    SSE 接口：前端通过 EventSource 连接这个接口
-    """
-    generator = agent_stream(url)
-    return EventSourceResponse(generator)
+    return EventSourceResponse(agent_stream(url))
 
-# ==========================================
-# 启动入口
-# ==========================================
 if __name__ == "__main__":
     import uvicorn
-    # 启动服务器，端口 8000
     uvicorn.run(app, host="127.0.0.1", port=8000)
