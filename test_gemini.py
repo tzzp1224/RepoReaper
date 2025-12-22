@@ -1,4 +1,5 @@
 import sys
+from dotenv import load_dotenv
 import io
 # ==========================================
 # ⚡️ 修复 Windows 终端中文乱码/报错的关键代码
@@ -12,14 +13,19 @@ import os
 # ==========================================
 # 1. 配置 (Configuration)
 # ==========================================
-# 依然需要填入你的 API Key
-my_api_key = ""
+
+load_dotenv()
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+if not GEMINI_API_KEY:
+    raise ValueError("❌ 未找到 GEMINI_API_KEY，请检查 .env 文件")
 
 # ==========================================
 # 2. 初始化客户端 (Client Instantiation)
 # ==========================================
 # 新版 SDK 使用 Client 模式，更加工程化
-client = genai.Client(api_key=my_api_key)
+client = genai.Client(aapi_key=GEMINI_API_KEY)
 
 # ==========================================
 # 3. 准备输入 & 调用 (Call)

@@ -1,11 +1,16 @@
 from github import Github, Auth
+from dotenv import load_dotenv
 import os
 
 # ==========================================
 # 1. 配置
 # ==========================================
-GITHUB_TOKEN = ""  # 记得再次填入你的 Token！
+load_dotenv()
 
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+if not GITHUB_TOKEN:
+    print("❌ 错误：未找到 GITHUB_TOKEN，请检查 .env 文件")
+    
 # ==========================================
 # 2. 工具函数
 # ==========================================

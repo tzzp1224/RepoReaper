@@ -5,13 +5,20 @@ import time
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 from google import genai
+from dotenv import load_dotenv
 from tools_github import get_repo_structure, get_file_content
 
 # ==========================================
 # 1. 配置 (Configuration)
 # ==========================================
-# ⚠️⚠️⚠️ 再次确认填入的是你的 Key ⚠️⚠️⚠️
-GEMINI_API_KEY = ""
+
+load_dotenv()
+
+# 读取 Key
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+if not GEMINI_API_KEY:
+    raise ValueError("❌ 未找到 GEMINI_API_KEY，请检查 .env 文件")
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
