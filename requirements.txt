@@ -1,0 +1,16 @@
+# Web Framework
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+sse-starlette>=1.6.1
+
+# AI & LLM (Google Gemini New SDK)
+google-genai>=0.2.0
+
+# Vector Database
+chromadb>=0.4.20
+
+# GitHub API Client
+PyGithub>=2.1.1
+
+# Utilities
+python-dotenv>=1.0.0
