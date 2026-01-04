@@ -4,6 +4,7 @@ import asyncio
 import traceback
 import re
 import ast
+import httpx
 from app.core.config import settings
 from app.utils.llm_client import client
 from app.services.github_service import get_repo_structure, get_file_content
@@ -103,18 +104,16 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
     try:
         vector_db = store_manager.get_store(session_id)
         vector_db.reset_collection() 
-        vector_db.repo_url = repo_url
+        # 注意：这里我们不需要手动 set repo_url，后面 save_context 会处理
         
         chunker = PythonASTChunker(min_chunk_size=50)
 
         file_list = await asyncio.to_thread(get_repo_structure, repo_url)
         if not file_list:
-            yield json.dumps({"step": "error", "message": "❌ Failed to fetch file list. Check URL or Token."})
-            return
+            raise Exception("Repository is empty or unreadable.")
 
         yield json.dumps({"step": "fetched", "message": f"📦 Found {len(file_list)} files. Building Repo Map (AST Parsing)..."})        
-        # === 使用新的 Repo Map 生成逻辑 ===
-        # 这会比之前稍慢一点点（因为要下载十几个文件），但对 Agent 智商提升巨大
+        
         file_tree_str = await generate_repo_map(repo_url, file_list, limit=15)
         
         MAX_ROUNDS = 3
@@ -125,7 +124,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
         for round_idx in range(MAX_ROUNDS):
             yield json.dumps({"step": "thinking", "message": f"🕵️ [Round {round_idx+1}/{MAX_ROUNDS}] DeepSeek is analyzing Repo Map..."})
             
-            # === DeepSeek English Prompt Strategy ===
+            # ... (DeepSeek Prompt 逻辑保持不变) ...
             system_prompt = "You are a Senior Software Architect. Your goal is to understand the codebase."
             user_content = f"""
             [Project Repo Map]
@@ -161,7 +160,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
             )
             
             raw_content = response.choices[0].message.content
-            target_files = extract_json_from_text(raw_content)
+            target_files = extract_json_from_text(raw_content) # 确保 import 了这个辅助函数
 
             valid_files = [f for f in target_files if f in file_list and f not in visited_files]
 
@@ -206,13 +205,15 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
             
             context_summary += new_knowledge
             
-            # Save global context
-            vector_db.global_context = {
+            # === 核心修改：将上下文写入磁盘，供其他 Worker 读取 ===
+            global_context_data = {
                 "file_tree": file_tree_str,
                 "summary": context_summary[:8000] 
             }
+            # 这是一个阻塞 IO 操作，但在 loop 中写入小 JSON 影响不大
+            vector_db.save_context(repo_url, global_context_data)
+            
             yield json.dumps({"step": "indexing", "message": f"🧠 [Round {round_idx+1}] Knowledge graph updated."})
-
         # Final Report
         yield json.dumps({"step": "generating", "message": "📝 Generating technical report..."})
         
@@ -357,5 +358,22 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
         yield json.dumps({"step": "finish", "message": "✅ Analysis Complete!"})
 
     except Exception as e:
+        # === 核心修改：全局异常捕获 ===
+        import traceback
         traceback.print_exc()
-        yield json.dumps({"step": "error", "message": f"💥 System Error: {str(e)}"})
+        
+        # 提取友好的错误信息
+        error_msg = str(e)
+        if "401" in error_msg:
+            ui_msg = "❌ GitHub Token Invalid. Please check your settings."
+        elif "403" in error_msg:
+            ui_msg = "❌ GitHub API Rate Limit Exceeded. Try again later or add a Token."
+        elif "404" in error_msg:
+            ui_msg = "❌ Repository Not Found. Check the URL."
+        elif "Timeout" in error_msg or "ConnectError" in error_msg:
+            ui_msg = "❌ Network Timeout. LLM or GitHub is not responding."
+        else:
+            ui_msg = f"💥 System Error: {error_msg}"
+            
+        yield json.dumps({"step": "error", "message": ui_msg})
+        return # 终止流

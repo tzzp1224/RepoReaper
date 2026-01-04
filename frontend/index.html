@@ -294,16 +294,21 @@
     
     <div class="left-panel" id="leftPanel">
         <div class="input-bar">
-            <input type="text" id="repoUrl" value="https://github.com/fastapi/fastapi" placeholder="Enter GitHub Repo URL...">
-            
-            <div class="lang-toggle">
-                <input type="radio" id="lang-en" name="lang" value="en" checked>
-                <label for="lang-en" title="Generate report in English">ENG</label>
+            <form onsubmit="return false;" style="display: contents;">
+                <input type="text" id="repoUrl" value="https://github.com/fastapi/fastapi" 
+                    placeholder="Enter GitHub Repo URL..." 
+                    onkeypress="handleRepoKeyPress(event)">
                 
-                <input type="radio" id="lang-zh" name="lang" value="zh">
-                <label for="lang-zh" title="使用中文生成报告">中文</label>
-            </div>
-            <button onclick="startAnalysis()" id="btn-analyze">Analyze</button>
+                <div class="lang-toggle">
+                    <input type="radio" id="lang-en" name="lang" value="en" checked>
+                    <label for="lang-en" title="Generate report in English">ENG</label>
+                    
+                    <input type="radio" id="lang-zh" name="lang" value="zh">
+                    <label for="lang-zh" title="使用中文生成报告">中文</label>
+                </div>
+                
+                <button type="button" onclick="startAnalysis()" id="btn-analyze">Analyze</button>
+            </form>
         </div>
         
         <div class="panel-content">
@@ -349,11 +354,13 @@
     const API_BASE = "http://127.0.0.1:8000";
     let fullReportMarkdown = "";
 
+    // app/index.html 约 340 行
     function getOrCreateSessionId() {
-        let sid = localStorage.getItem("rag_session_id");
+        // === 必须修改为 sessionStorage ===
+        let sid = sessionStorage.getItem("rag_session_id");
         if (!sid) {
-            sid = 'sess_' + Math.random().toString(36).substr(2, 9) + Date.now().toString(36);
-            localStorage.setItem("rag_session_id", sid);
+            sid = 'sess_' + Math.random().toString(36).substr(2, 9);
+            sessionStorage.setItem("rag_session_id", sid);
         }
         return sid;
     }
@@ -622,6 +629,21 @@
         document.getElementById('chatInput').disabled = !enabled;
         document.getElementById('btn-chat').disabled = !enabled;
         document.getElementById('chatInput').placeholder = enabled ? "请输入你的问题..." : "等待分析完成...";
+    }
+
+// app/index.html 底部 script 区域
+
+    function handleRepoKeyPress(e) {
+        if (e.key === 'Enter') {
+            // 1. 阻止默认行为（防止刷新）
+            e.preventDefault();
+            // 2. 阻止事件冒泡（防止触发父级 form 提交）
+            e.stopPropagation();
+            
+            // 3. 手动触发点击
+            document.getElementById('btn-analyze').click();
+            return false;
+        }
     }
 
     function handleKeyPress(e) { if (e.key === 'Enter') sendChat(); }

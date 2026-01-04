@@ -1,5 +1,5 @@
 # 文件路径: app/services/github_service.py
-from github import Github, Auth
+from github import Github, Auth, GithubException
 from app.core.config import settings
 import os
 
@@ -18,30 +18,24 @@ def get_repo_structure(repo_url):
     """获取仓库文件树，包含过滤逻辑"""
     repo_name = parse_repo_url(repo_url)
     if not repo_name:
-        return None
+        raise ValueError("Invalid GitHub URL format") # 抛出异常
 
     print(f"🔍 [GitHub] 连接中: {repo_name} ...")
     
     try:
-        # 使用 settings 中的 Token
         g = Github(auth=Auth.Token(settings.GITHUB_TOKEN)) if settings.GITHUB_TOKEN else Github()
         repo = g.get_repo(repo_name)
-        
-        # 自动获取默认分支
         default_branch = repo.default_branch
-        
-        # 获取文件树 (递归)
         contents = repo.get_git_tree(default_branch, recursive=True).tree
         
         file_list = []
         
-        # --- 过滤器配置 (保留原代码逻辑) ---
+        # ... (过滤器配置 IGNORED_EXTS, IGNORED_DIRS 保持不变) ...
         IGNORED_EXTS = {
             '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.mp4',
             '.pyc', '.lock', '.zip', '.tar', '.gz', '.pdf',
             '.DS_Store', '.gitignore', '.gitattributes'
         }
-        
         IGNORED_DIRS = {
             '.git', '.github', '.vscode', '.idea', '__pycache__', 
             'node_modules', 'venv', 'env', 'build', 'dist', 'site-packages',
@@ -51,21 +45,25 @@ def get_repo_structure(repo_url):
         for content in contents:
             path = content.path
             if content.type != "blob": continue
-            
-            # 检查目录过滤
             if any(part in IGNORED_DIRS for part in path.split("/")): continue
-            
-            # 检查后缀过滤
             ext = os.path.splitext(path)[1]
             if ext in IGNORED_EXTS: continue
-                
             file_list.append(path)
 
         return file_list
 
+    except GithubException as e:
+        # === 核心修改：不再吞掉异常，而是根据状态码抛出更友好的错误 ===
+        if e.status == 401:
+            raise Exception("GitHub Token 无效或过期 (401 Unauthorized)。请检查 .env 配置。")
+        elif e.status == 403:
+            raise Exception("GitHub API 请求受限 (403 Rate Limit)。建议添加 Token。")
+        elif e.status == 404:
+            raise Exception(f"找不到仓库 {repo_name} (404 Not Found)。请检查 URL 或私有权限。")
+        else:
+            raise Exception(f"GitHub API Error: {e.data.get('message', str(e))}")
     except Exception as e:
-        print(f"❌ [GitHub Error] 获取结构失败: {e}")
-        return []
+        raise e
 
 def get_file_content(repo_url, file_path):
     """

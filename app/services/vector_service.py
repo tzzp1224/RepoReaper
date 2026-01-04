@@ -3,54 +3,125 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 from app.core.config import settings
 from rank_bm25 import BM25Okapi
-# from sentence_transformers import SentenceTransformer  <-- 删除这行，太占内存
 from openai import AsyncOpenAI  
 import re
-import time
 import os
+import json
+import shutil
 
-# 初始化本地 Embedding 模型 (单例)
+# 初始化本地 Embedding 模型
 client = AsyncOpenAI(
     api_key=settings.SILICON_API_KEY, 
     base_url="https://api.siliconflow.cn/v1"
 )
 EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
 
-print(f"✅ Embedding Model: {EMBEDDING_MODEL_NAME}")
+# === 核心修改：定义数据存储路径 ===
+DATA_DIR = "data"
+CHROMA_DIR = os.path.join(DATA_DIR, "chroma_db")
+CONTEXT_DIR = os.path.join(DATA_DIR, "contexts")
+
+# 确保目录存在
+os.makedirs(CHROMA_DIR, exist_ok=True)
+os.makedirs(CONTEXT_DIR, exist_ok=True)
+
+# === 核心优化：在模块层级初始化 Client，而不是在类里 ===
+# 这样每个 Worker 进程启动时只会创建一个 Client 实例，减少锁冲突
+try:
+    GLOBAL_CHROMA_CLIENT = chromadb.PersistentClient(path=CHROMA_DIR)
+except Exception as e:
+    print(f"⚠️ ChromaDB Init Error: {e}")
+    GLOBAL_CHROMA_CLIENT = None
 
 class VectorStore:
     def __init__(self, session_id: str):
         self.session_id = session_id
-        self.chroma_client = chromadb.Client(ChromaSettings(anonymized_telemetry=False))
+        
+        # 使用全局 Client
+        self.chroma_client = GLOBAL_CHROMA_CLIENT
+        
         self.collection_name = f"repo_{session_id}"
+        # 注意：get_or_create_collection 是轻量级操作
+        self.collection = self.chroma_client.get_or_create_collection(name=self.collection_name)
+        
+        self.context_file = os.path.join(CONTEXT_DIR, f"{session_id}.json")
         
         self.repo_url = None
         self.indexed_files = set() 
-        self.global_context = {}
-        
-        self.bm25 = None
         self.doc_store = [] 
+        self.bm25 = None
         
-        self.reset_collection()
+        # 初始化时尝试加载已有数据
+        self._load_local_state()
+
+    def _load_local_state(self):
+        """从磁盘加载上下文和 BM25 数据"""
+        # 1. 加载 Global Context (JSON)
+        if os.path.exists(self.context_file):
+            try:
+                with open(self.context_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.repo_url = data.get("repo_url")
+                    self.global_context = data.get("global_context", {})
+            except Exception as e:
+                print(f"⚠️ Load Context Error: {e}")
+                self.global_context = {}
+        else:
+            self.global_context = {}
+
+        # 2. 从 Chroma 恢复 indexed_files 和 doc_store (用于构建 BM25)
+        # 注意：每次请求都全量拉取可能稍慢，但为了无状态化必须这样做，
+        # 或者你可以选择仅在 search 时构建 BM25。
+        existing_data = self.collection.get()
+        if existing_data['ids']:
+            self.doc_store = []
+            self.indexed_files = set()
+            for i, doc_id in enumerate(existing_data['ids']):
+                content = existing_data['documents'][i]
+                meta = existing_data['metadatas'][i]
+                self.indexed_files.add(meta['file'])
+                self.doc_store.append({
+                    "id": doc_id,
+                    "content": content,
+                    "metadata": meta
+                })
+            # 重建 BM25
+            tokenized_corpus = [self._tokenize(doc['content']) for doc in self.doc_store]
+            if tokenized_corpus:
+                self.bm25 = BM25Okapi(tokenized_corpus)
+
+    def save_context(self, repo_url, context_data):
+        """显式保存上下文到 JSON (供其他 Worker 读取)"""
+        self.repo_url = repo_url
+        self.global_context = context_data
+        
+        data = {
+            "repo_url": repo_url,
+            "global_context": context_data
+        }
+        with open(self.context_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
     def reset_collection(self):
         try:
             self.chroma_client.delete_collection(name=self.collection_name)
+            # 删除对应的 JSON 上下文
+            if os.path.exists(self.context_file):
+                os.remove(self.context_file)
         except Exception:
             pass
-        self.collection = self.chroma_client.create_collection(name=self.collection_name)
+        self.collection = self.chroma_client.get_or_create_collection(name=self.collection_name)
         self.bm25 = None
         self.doc_store = []
         self.repo_url = None
         self.indexed_files = set()
-        self.global_context = {} # 重置时清空
-        print(f"🧹 [Session: {self.session_id}] 数据库已重置")
+        self.global_context = {}
 
-    async def embed_text(self, text):  # <--- 改为 async
-        """异步调用 API 生成向量"""
+    # ... embed_text 方法保持不变 ...
+    async def embed_text(self, text):
         try:
             text = text.replace("\n", " ")
-            response = await client.embeddings.create( # <--- await
+            response = await client.embeddings.create(
                 input=[text],
                 model=EMBEDDING_MODEL_NAME
             )
@@ -62,27 +133,23 @@ class VectorStore:
     def _tokenize(self, text):
         return [t.lower() for t in re.split(r'[^a-zA-Z0-9]', text) if t.strip()]
 
-    async def add_documents(self, documents, metadatas): # <--- 改为 async
+    # ... add_documents 方法保持不变，但移除了 print ...
+    async def add_documents(self, documents, metadatas):
         if not documents: return
         
         embeddings = []
         ids = []
         
-        # === 批量生成 Embedding (API 优化) ===
         try:
-            # 注意：大部分 API 单次请求限制 batch size (如 100 或 2048)
-            # 如果 documents 很大，建议分批调用
             batch_size = 20  
             for i in range(0, len(documents), batch_size):
                 batch_docs = documents[i : i + batch_size]
-                # 清洗换行符
                 batch_docs_clean = [d.replace("\n", " ") for d in batch_docs]
                 
                 response = await client.embeddings.create(
                     input=batch_docs_clean,
                     model=EMBEDDING_MODEL_NAME
                 )
-                # 按顺序提取 embedding
                 batch_embeddings = [item.embedding for item in response.data]
                 embeddings.extend(batch_embeddings)
                 
@@ -104,11 +171,11 @@ class VectorStore:
         if embeddings:
             self.collection.add(documents=documents, embeddings=embeddings, metadatas=metadatas, ids=ids)
         
+        # 实时更新内存中的 BM25，下次其他 Worker 重新 init 时会重新加载
         tokenized_corpus = [self._tokenize(doc['content']) for doc in self.doc_store]
         self.bm25 = BM25Okapi(tokenized_corpus)
-        
-        print(f"✅ [Session: {self.session_id}] 增量索引完成，当前文档数: {len(self.doc_store)}")
 
+    # ... get_documents_by_file 保持不变 ...
     def get_documents_by_file(self, file_path):
         raw_docs = [doc for doc in self.doc_store if doc['metadata']['file'] == file_path]
         formatted_docs = []
@@ -121,8 +188,10 @@ class VectorStore:
                 "score": 1.0
             })
         return sorted(formatted_docs, key=lambda x: x['metadata'].get('start_line', 0))
-    
+
+    # ... search_hybrid 保持不变 ...
     async def search_hybrid(self, query, top_k=3):
+        # (代码逻辑与之前一致，无需变动，因为 self.collection 已经是持久化的了)
         vector_results = []
         query_embedding = await self.embed_text(query)
         
@@ -179,15 +248,14 @@ class VectorStore:
         return [res['item'] for res in sorted_results[:top_k]]
 
 class VectorStoreManager:
-    def __init__(self):
-        self.stores = {} 
-        self.last_access = {} 
-
+    """
+    无状态管理器。
+    每次 get_store 都会实例化一个新的 VectorStore 对象，
+    但因为底层使用的是 PersistentClient 和磁盘 JSON，
+    所以数据在不同 Worker 之间是同步的。
+    """
     def get_store(self, session_id: str) -> VectorStore:
-        if session_id not in self.stores:
-            print(f"🆕 创建新会话: {session_id}")
-            self.stores[session_id] = VectorStore(session_id)
-        self.last_access[session_id] = time.time()
-        return self.stores[session_id]
+        # 移除 print 以减少日志噪音
+        return VectorStore(session_id)
 
 store_manager = VectorStoreManager()
