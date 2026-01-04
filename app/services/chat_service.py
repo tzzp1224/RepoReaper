@@ -10,186 +10,212 @@ from app.services.chunking_service import PythonASTChunker
 
 chunker = PythonASTChunker(min_chunk_size=100)
 
+# === 新增：简单的中文检测 ===
+def is_chinese_query(text: str) -> bool:
+    """检测字符串中是否包含中文字符"""
+    for char in text:
+        if '\u4e00' <= char <= '\u9fff':
+            return True
+    return False
+
+# === 优化 2：查询重写 (解决中英文检索不匹配问题) ===
+async def _rewrite_query(user_query: str):
+    """
+    使用 LLM 将用户的自然语言（可能是中文）转换为 3-5 个代码搜索关键词（英文）。
+    """
+    prompt = f"""
+    You are a Code Search Expert.
+    Task: Convert the user's query into 3-5 English keywords for code search (BM25/Vector).
+    
+    User Query: "{user_query}"
+    
+    Rules:
+    1. Output ONLY a JSON list of strings.
+    2. Translate concepts to technical terms (e.g., "鉴权" -> "auth", "login", "middleware").
+    3. Keep it short.
+    
+    Example Output: ["authentication", "login_handler", "jwt_verify"]
+    """
+    try:
+        response = await client.chat.completions.create(
+            model=settings.MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=100
+        )
+        content = response.choices[0].message.content
+        # 简单清洗
+        content = re.sub(r"^```(json)?|```$", "", content.strip(), flags=re.MULTILINE).strip()
+        keywords = json.loads(content)
+        if isinstance(keywords, list):
+            return " ".join(keywords) # 返回空格分隔的字符串供 BM25 使用
+        return user_query
+    except Exception as e:
+        print(f"⚠️ Query Rewrite Failed: {e}")
+        return user_query # 降级：直接用原句
+
 async def process_chat_stream(user_query: str, session_id: str):
-    """
-    流式处理聊天请求，支持动态加载和实时反馈
-    """
     vector_db = store_manager.get_store(session_id)
     
-    # 1. 初次检索
-    relevant_docs = vector_db.search_hybrid(user_query, top_k=5)
+    # === 1. 语言环境检测 ===
+    use_chinese = is_chinese_query(user_query)
+    
+    # 定义 UI 提示语 (根据语言切换)
+    ui_msgs = {
+        "thinking": f"> 🧠 **Thinking:** Searching for code related to: " if not use_chinese else f"> 🧠 **思考中:** 正在检索相关代码: ",
+        "action": f"\n\n> 🔍 **Agent Action:** Retrieving missing files: " if not use_chinese else f"\n\n> 🔍 **Agent 动作:** 正在读取缺失文件: ",
+        "error_url": f"> ⚠️ Error: Repository URL lost.\n" if not use_chinese else f"> ⚠️ 错误: 仓库链接丢失。\n",
+        "warning_file": f"> ⚠️ Warning: Failed to access " if not use_chinese else f"> ⚠️ 警告: 无法读取 ",
+        "system_note": "Please provide the FINAL answer." if not use_chinese else "System Notification: Files loaded. Please provide the FINAL answer in Chinese."
+    }
 
-    # # === 🔍DEBUG 代码开始 ===
-    # print("\n" + "="*50)
-    # print(f"🧐 [DEBUG] 用户提问: {user_query}")
-    # print(f"📊 [DEBUG] 检索命中 {len(relevant_docs)} 个片段:")
-    # for i, doc in enumerate(relevant_docs):
-    #     # 使用 .get() 防止 KeyError，虽然上面修好了，但这样更安全
-    #     meta = doc.get('metadata', {}) 
-        
-    #     print(f"  Result {i+1}:")
-    #     print(f"    - File: {meta.get('file', 'Unknown')}")
-    #     print(f"    - Type: {meta.get('type', 'unknown')}") 
-    #     print(f"    - ClassCtx: {meta.get('class', 'None')}")
-    #     # 打印前 50 个字符预览
-    #     content_preview = doc.get('content', '')[:50].replace('\n', ' ')
-    #     print(f"    - Content Preview: {content_preview}...") 
-    # print("="*50 + "\n")
-    # # === 🔍DEBUG 代码结束 ===
+    # === 步骤 0: 查询重写 (增强检索命中率) ===
+    # 比如用户问 "鉴权在哪里？" -> rewrite -> "auth login verify"
+    search_query = await _rewrite_query(user_query)
+    # 可以在这里 yield 一个 debug 信息给前端，如果不想要可以注释掉
+    yield f"{ui_msgs['thinking']}`{search_query}`...\n\n"
     
-    context_str = _build_context(relevant_docs)
+    # 1. 检索 RAG (使用重写后的 Query)
+    # 使用 asyncio.to_thread 避免阻塞主线程
+    relevant_docs = await vector_db.search_hybrid(search_query, top_k=6)
+    rag_context = _build_context(relevant_docs)
     
-    # 2. 构造 Prompt
-    system_instruction = """
-    You are a Code Expert. 
+    # 2. 获取全局上下文
+    global_context = vector_db.global_context or {}
+    file_tree = global_context.get("file_tree", "(File tree not available.)")
+    agent_summary = global_context.get("summary", "") 
     
-    [Rules]
-    1. Answer based on Context.
-    2. If the code exists in Context -> Just answer directly.
-    3. If the specific file is MISSING in Context but you know the path -> Output ONLY JSON: {"missing_file": "path/to/file.py"}
+    # 3. 构造 Prompt (Context Priority)
+    lang_instruction = "IMPORTANT: The user is asking in Chinese. You MUST reply in Simplified Chinese (简体中文)." if use_chinese else "Reply in English."
+    system_instruction = f"""
+    You are a Senior GitHub Repository Analyst.
+    {lang_instruction}
     
-    [Critical Strategy for "Summary" Questions]
-    If the user asks "What is in file X?" or "Summarize file X", and you only see a few functions from X in the Context:
-    -> This means you are seeing incomplete fragments.
-    -> You MUST request to read the file again to get the FULL content.
-    -> Output JSON: {"missing_file": "path/to/file.py"}
+    [Global Context - Repo Map]
+    {file_tree}
+    
+    [Agent Analysis Summary]
+    {agent_summary}
+    
+    [Current Code Context (Retrieved)]
+    {rag_context}
+    
+    [INSTRUCTIONS]
+    1. **CHECK CONTEXT FIRST**: Look at the [Current Code Context]. Does it contain the answer?
+    2. **IF YES**: Answer directly. DO NOT use tools.
+    3. **IF NO**: Request missing files using tags.
+    
+    [Tool Usage]
+    Format: <tool_code>path/to/file</tool_code>
     """
     
-    prompt = f"""
-    {system_instruction}
+    augmented_user_query = f"""
+    {user_query}
     
-    Context:
-    {context_str}
-    
-    User Query: {user_query}
+    (System Note: Priority 1: Answer using context. Priority 2: Use <tool_code> ONLY if critical info is missing.)
     """
     
     if not client: 
         yield "❌ LLM Error: Client not initialized"
         return
 
+    messages = [
+        {"role": "system", "content": system_instruction},
+        {"role": "user", "content": augmented_user_query}
+    ]
+
     try:
-        # === 核心修改：第一次调用改为流式 (generate_content_stream) ===
-        stream = client.models.generate_content_stream(
+        # === Phase 1: 思考与回答 ===
+        stream = await client.chat.completions.create(
             model=settings.MODEL_NAME,
-            contents=prompt
+            messages=messages,
+            stream=True,
+            temperature=0.1, 
+            max_tokens=4096
         )
         
-        # === 智能缓冲逻辑 ===
         buffer = ""
-        is_checking_json = True # 标记是否还在检测 JSON 阶段
-        is_tool_call = False    # 标记最终是否确认为工具调用
+        full_response = ""
+        requested_files = set()
         
-        for chunk in stream:
-            text_chunk = chunk.text
+        async for chunk in stream:
+            content = chunk.choices[0].delta.content or ""
+            if not content: continue
             
-            if is_checking_json:
-                buffer += text_chunk
-                # 清洗 buffer 以前缀检查
-                clean_start = buffer.strip().replace("```json", "").replace("```", "").strip()
+            buffer += content
+            full_response += content
+            
+            # 检测标签
+            if "</tool_code>" in buffer:
+                matches = re.findall(r"<tool_code>\s*(.*?)\s*</tool_code>", buffer, re.DOTALL)
+                for f in matches:
+                    clean_f = f.strip().replace("'", "").replace('"', "").replace("`", "")
+                    requested_files.add(clean_f)
                 
-                # 如果缓冲区还很短，继续积攒 (防止误判)
-                if len(clean_start) < 5:
-                    continue
-                    
-                # 检查特征
-                if clean_start.startswith("{"):
-                    # 看起来像 JSON，继续缓冲，不输出给用户
-                    continue 
-                else:
-                    # 确定不是 JSON，是普通回答！
-                    # 1. 把积攒的 buffer 吐出去
-                    yield buffer
-                    buffer = "" # 清空
-                    is_checking_json = False # 停止检测，后续直接透传
+                yield content
+                buffer = "" 
             else:
-                # 已经确定是普通文本，直接流式输出
-                yield text_chunk
+                yield content
 
-        # 流结束了
-        # 如果 is_checking_json 依然为 True，说明 LLM 回复很短或者全是 JSON
-        missing_file = None
-        if is_checking_json and buffer:
-            # 尝试解析 JSON
-            clean_text = buffer.strip().replace("```json", "").replace("```", "").strip()
-            if "missing_file" in clean_text:
-                match = re.search(r"\{.*?\}", clean_text, re.DOTALL)
-                if match:
-                    try:
-                        data = json.loads(match.group(0))
-                        missing_file = data.get("missing_file")
-                        is_tool_call = True
-                    except:
-                        pass
-            
-            # 如果不是 JSON，说明是一句很短的话，把它补发给用户
-            if not is_tool_call:
-                yield buffer
+        if "</tool_code>" in buffer:
+            matches = re.findall(r"<tool_code>\s*(.*?)\s*</tool_code>", buffer, re.DOTALL)
+            for f in matches:
+                clean_f = f.strip().replace("'", "").replace('"', "").replace("`", "")
+                requested_files.add(clean_f)
 
-        # === 分支 A: 触发动态加载 (ReAct) ===
-        if is_tool_call and missing_file:
-            # 实时反馈给前端
-            yield f"> 🤔 发现缺少文件: `{missing_file}`\n\n"
+        # === Phase 2: 按需下载 ===
+        if requested_files:
+            file_list_str = ", ".join([f"`{f}`" for f in requested_files])
+            yield f"\n\n> 🔍 **Agent Action:** Retrieving missing files: {file_list_str}...\n\n"
             
             if not vector_db.repo_url:
-                yield f"> ⚠️ 会话信息丢失 (Repo URL)，无法下载。\n\n"
+                yield f"> ⚠️ Error: Repository URL lost.\n"
                 return
 
-            new_docs_content = []
-            
-            # 检查已索引
-            if missing_file in vector_db.indexed_files:
-                yield f"> 📚 该文件已在知识库中，正在提取细节...\n\n"
-                stored_docs = vector_db.get_documents_by_file(missing_file)
-                if stored_docs:
-                    new_docs_content = stored_docs
+            new_docs_accumulated = []
+            for file_path in requested_files:
+                if file_path in vector_db.indexed_files:
+                    docs = vector_db.get_documents_by_file(file_path)
+                    new_docs_accumulated.extend(docs)
                 else:
-                    yield f"> ⚠️ 索引中未找到内容，尝试重新下载...\n\n"
-            
-            # 下载
-            if not new_docs_content:
-                yield f"> 📥 正在下载并分析: `{missing_file}`...\n\n"
-                success = await _download_and_index(vector_db, missing_file)
-                if success:
-                    new_docs_content = vector_db.get_documents_by_file(missing_file)
-                else:
-                    yield f"> ❌ 下载失败 (文件不存在或网络错误)。\n\n"
-                    # 这里可以选择把原始 buffer (JSON) 打印出来，或者忽略
-                    return
+                    success = await _download_and_index(vector_db, file_path)
+                    if success:
+                        docs = vector_db.get_documents_by_file(file_path)
+                        new_docs_accumulated.extend(docs)
+                    else:
+                        yield f"> ⚠️ Warning: Failed to access `{file_path}`.\n"
 
-            # === 二次生成 (Streaming) ===
-            supplementary_context = _build_context(new_docs_content)
-            
-            retry_prompt = f"""
-            System: You requested '{missing_file}'. Here is its content.
-            Now answer the user's question based on the updated context.
-            
-            New File Content:
-            {supplementary_context}
-            
-            Original Context:
-            {context_str}
-            
-            User Query: {user_query}
-            """
-            
-            # 第二次流式调用
-            stream_retry = client.models.generate_content_stream(
-                model=settings.MODEL_NAME,
-                contents=retry_prompt
-            )
-            for chunk in stream_retry:
-                yield chunk.text
-                await asyncio.sleep(0.01)
+            # === Phase 3: 最终回答 ===
+            if new_docs_accumulated:
+                supplementary_context = _build_context(new_docs_accumulated)
+                
+                final_messages = [
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": augmented_user_query},
+                    {"role": "assistant", "content": full_response},
+                    {"role": "user", "content": f"System Notification: Requested files loaded.\n\n[New Code Context]\n{supplementary_context}\n\nPlease provide the FINAL answer."}
+                ]
+                
+                stream_final = await client.chat.completions.create(
+                    model=settings.MODEL_NAME,
+                    messages=final_messages,
+                    stream=True,
+                    temperature=0.2
+                )
+                
+                async for chunk in stream_final:
+                    content = chunk.choices[0].delta.content or ""
+                    if content:
+                        yield content
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        yield f"❌ Error: {str(e)}"
+        yield f"❌ System Error: {str(e)}"
 
-# 辅助函数 (保持不变)
+# 辅助函数保持不变
 def _build_context(docs):
-    if not docs: return "No code found."
+    if not docs: return "(No relevant code snippets found yet)"
     context = ""
     for doc in docs:
         file_info = doc['file']
@@ -205,8 +231,12 @@ async def _download_and_index(vector_db, file_path):
         if not content: return False
         
         chunks = await asyncio.to_thread(chunker.chunk_file, content, file_path)
-        if not chunks: return False
-        
+        if not chunks: 
+            chunks = [{
+                "content": content,
+                "metadata": {"file": file_path, "type": "text", "name": "root", "class": ""}
+            }]
+            
         documents = [c["content"] for c in chunks]
         metadatas = []
         for c in chunks:
@@ -217,9 +247,8 @@ async def _download_and_index(vector_db, file_path):
                 "name": meta.get("name", ""),
                 "class": meta.get("class") or ""
             })
-            
-        await asyncio.to_thread(vector_db.add_documents, documents, metadatas)
+        await vector_db.add_documents(documents, metadatas)
         return True
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Download Error: {e}")
         return False

@@ -31,10 +31,12 @@ def health_check():
     return {"status": "ok"}
 
 @app.get("/analyze")
-async def analyze(url: str, session_id: str): 
+# 增加 language 参数，默认为 'en'
+async def analyze(url: str, session_id: str, language: str = "en"): 
     if not session_id:
         return {"error": "Missing session_id"}
-    return EventSourceResponse(agent_stream(url, session_id))
+    # 将 language 传给 agent_stream
+    return EventSourceResponse(agent_stream(url, session_id, language))
 
 # === 修改：聊天接口改为流式 ===
 @app.post("/chat")

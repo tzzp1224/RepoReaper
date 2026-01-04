@@ -68,16 +68,30 @@ def get_repo_structure(repo_url):
         return []
 
 def get_file_content(repo_url, file_path):
-    """下载单个文件内容"""
+    """
+    下载单个文件内容。
+    ✨ 修复：增加对文件夹(Directory)的处理逻辑。
+    """
     repo_name = parse_repo_url(repo_url)
     if not repo_name: return None
     
     try:
         g = Github(auth=Auth.Token(settings.GITHUB_TOKEN)) if settings.GITHUB_TOKEN else Github()
         repo = g.get_repo(repo_name)
-        # 获取文件内容并解码
-        content_file = repo.get_contents(file_path, ref=repo.default_branch)
-        return content_file.decoded_content.decode('utf-8')
+        
+        # PyGithub get_contents 可能返回 ContentFile 或 List[ContentFile]
+        content = repo.get_contents(file_path, ref=repo.default_branch)
+        
+        # 情况 A: 这是一个文件夹 (返回列表)
+        if isinstance(content, list):
+            file_names = [f.name for f in content]
+            # 返回文件夹清单，让 LLM 知道里面有什么，从而决定下一步读哪个具体文件
+            return f"Directory '{file_path}' contains:\n" + "\n".join([f"- {name}" for name in file_names])
+            
+        # 情况 B: 这是一个文件
+        return content.decoded_content.decode('utf-8')
+        
     except Exception as e:
-        print(f"❌ [GitHub Error] 读取文件 {file_path} 失败: {e}")
+        # 如果是因为路径不存在等原因，打印错误
+        print(f"❌ [GitHub Error] 读取路径 {file_path} 失败: {e}")
         return None

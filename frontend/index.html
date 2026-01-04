@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GitHub RAG Agent</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <style>
         :root {
             /* === 配色微调 (清新风格) === */
@@ -63,7 +64,14 @@
         .panel-content { padding: 24px; overflow-y: auto; flex: 1; }
 
         /* 输入栏 */
-        .input-bar { padding: 20px; border-bottom: 1px solid var(--border-color); background: #ffffff; display: flex; gap: 12px; }
+        .input-bar { 
+            padding: 20px; 
+            border-bottom: 1px solid var(--border-color); 
+            background: #ffffff; 
+            display: flex; 
+            gap: 12px; 
+            align-items: center; /* 垂直居中对齐 */
+        }
         .chat-input-bar { padding: 20px; border-top: 1px solid var(--border-color); background: #ffffff; display: flex; gap: 12px; }
 
         input[type="text"] {
@@ -78,15 +86,89 @@
         button:hover { background: #1d4ed8; }
         button:disabled { background: #93c5fd; cursor: not-allowed; }
 
+        /* === [新增] 美观的语言切换开关样式 === */
+        .lang-toggle {
+            display: flex;
+            background: #f1f5f9;
+            padding: 4px;
+            border-radius: 10px;
+            border: 1px solid var(--border-color);
+            flex-shrink: 0;
+        }
+
+        .lang-toggle input[type="radio"] {
+            display: none;
+        }
+
+        .lang-toggle label {
+            padding: 8px 16px;
+            font-size: 14px;
+            cursor: pointer;
+            border-radius: 8px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            user-select: none;
+        }
+
+        .lang-toggle label:hover {
+            color: var(--primary-color);
+        }
+
+        /* 选中状态 */
+        .lang-toggle input[type="radio"]:checked + label {
+            background: #ffffff;
+            color: var(--primary-color);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+            transform: scale(1.02);
+        }
+        /* ==================================== */
+
         /* 日志区域 */
         .logs-area {
             background: #f1f5f9; color: #475569; padding: 16px; border-radius: 8px; height: 140px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 15px; margin-bottom: 20px; line-height: 1.6; flex-shrink: 0; border: 1px solid var(--border-color);
         }
 
-        /* Markdown 内容样式 */
+        /* === Markdown 内容样式增强 (表格与结构) === */
         .markdown-body { font-size: 16px; line-height: 1.75; color: var(--text-primary); }
         .markdown-body h1, .markdown-body h2, .markdown-body h3 { margin-top: 1.5em; color: #1e293b; font-weight: 600; }
         
+        /* 列表样式 */
+        .markdown-body ul { padding-left: 1.5em; }
+        .markdown-body li { margin: 0.5em 0; }
+
+        /* 表格样式 (Table) */
+        .markdown-body table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.5em 0;
+            display: block; /* 允许横向滚动 */
+            overflow-x: auto;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .markdown-body th, .markdown-body td {
+            padding: 12px 16px;
+            border: 1px solid var(--border-color);
+            text-align: left;
+        }
+        
+        .markdown-body th {
+            background-color: #f1f5f9;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .markdown-body tr:nth-child(2n) {
+            background-color: #f8fafc;
+        }
+        
+        .markdown-body tr:hover {
+            background-color: #f0f9ff;
+        }
+
+        /* 代码样式 */
         .markdown-body code {
             background: var(--code-inline-bg);
             color: var(--code-inline-color);
@@ -107,6 +189,20 @@
             margin: 1.5em 0;
         }
         .markdown-body pre code { background: none; color: inherit; padding: 0; border: none; font-size: 14px; }
+
+        /* Mermaid 图表居中与交互 */
+        .mermaid {
+            display: flex;
+            justify-content: center;
+            margin: 20px 0;
+            background: var(--bg-color);
+            padding: 10px;
+            border-radius: 8px;
+            cursor: zoom-in; /* 提示可点击放大 */
+            transition: transform 0.2s;
+            overflow-x: auto; /* 允许小幅横向滚动 */
+        }
+        .mermaid:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
 
         /* 聊天气泡样式 */
         .chat-container { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 24px; }
@@ -137,6 +233,46 @@
 
         .source-tag { font-size: 13px; color: var(--text-secondary); margin-top: 12px; padding-top: 12px; border-top: 1px solid #f1f5f9; }
 
+        /* === 模态框 (Lightbox) 样式 === */
+        .modal {
+            display: none; /* 默认隐藏 */
+            position: fixed; 
+            z-index: 1000; 
+            left: 0; top: 0; width: 100%; height: 100%; 
+            background-color: rgba(0,0,0,0.8); /* 半透明黑背景 */
+            backdrop-filter: blur(5px);
+            overflow: hidden;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .modal-content-wrapper {
+            position: relative;
+            width: 95%; /* 稍微加宽一点 */
+            height: 95%;
+            background: white;
+            border-radius: 8px;
+            /* === 核心修改 === */
+            overflow: auto; /* 开启滚动条 */
+            display: block; /* 改为 block，避免 flex 居中导致的左侧裁切问题 */
+            text-align: center; /* 让小图居中，大图自然向右延伸 */
+            padding: 20px; /* 减小一点内边距，给图更多空间 */
+        }
+
+        /* 确保内部的 div (承载 svg 的容器) 能够自适应 */
+        #modalContent {
+            display: inline-block; /* 配合父级的 text-align: center 实现居中 */
+            min-width: 100%; /* 至少占满容器 */
+            text-align: left; /* 内部内容恢复左对齐 */
+        }
+
+        .close-btn {
+            position: absolute; top: 20px; right: 30px; 
+            color: #f1f1f1; font-size: 40px; font-weight: bold; 
+            cursor: pointer; z-index: 1001;
+        }
+        .close-btn:hover { color: #bbb; }
+
         @media (max-width: 768px) {
             .main-container { flex-direction: column; overflow-y: auto; }
             .left-panel, .right-panel { width: 100% !important; height: auto; min-height: 50vh; }
@@ -150,7 +286,7 @@
 <body>
 
 <div class="header">
-    <h1><span>🧠</span> GitHub RAG Agent <span class="badge">v4.3 Fix</span></h1>
+    <h1><span>🧠</span> GitHub RAG Agent <span class="badge">v5.2 Multi-Lang</span></h1>
     <div style="font-size: 14px; color: var(--text-secondary);">Session: <span id="sessionIdDisplay">...</span></div>
 </div>
 
@@ -158,17 +294,25 @@
     
     <div class="left-panel" id="leftPanel">
         <div class="input-bar">
-            <input type="text" id="repoUrl" value="https://github.com/fastapi/fastapi" placeholder="输入 GitHub 仓库 URL...">
-            <button onclick="startAnalysis()" id="btn-analyze">开始分析</button>
+            <input type="text" id="repoUrl" value="https://github.com/fastapi/fastapi" placeholder="Enter GitHub Repo URL...">
+            
+            <div class="lang-toggle">
+                <input type="radio" id="lang-en" name="lang" value="en" checked>
+                <label for="lang-en" title="Generate report in English">ENG</label>
+                
+                <input type="radio" id="lang-zh" name="lang" value="zh">
+                <label for="lang-zh" title="使用中文生成报告">中文</label>
+            </div>
+            <button onclick="startAnalysis()" id="btn-analyze">Analyze</button>
         </div>
         
         <div class="panel-content">
             <div class="logs-area" id="logs">
-                <div>[System] 准备就绪，等待输入...</div>
+                <div>[System] Ready to enter...</div>
             </div>
             <div class="markdown-body" id="report">
                 <div style="text-align: center; color: #94a3b8; margin-top: 80px; font-size: 18px;">
-                    📊 项目架构报告将在此处生成
+                    📊 The project architecture report will be generated here.
                 </div>
             </div>
         </div>
@@ -178,16 +322,30 @@
 
     <div class="right-panel" id="rightPanel">
         <div class="chat-container" id="chat-history">
-            <div class="msg ai">👋 你好！分析完成后，可以问我任何关于代码实现细节的问题。</div>
+            <div class="msg ai">👋 Hi! Once the analysis is done, ask me anything about the code.</div>
         </div>
         <div class="chat-input-bar">
-            <input type="text" id="chatInput" placeholder="例如：generate_unique_id 是怎么实现的？" onkeypress="handleKeyPress(event)" disabled>
+            <input type="text" id="chatInput" placeholder="e.g., How does generate_unique_id work?" onkeypress="handleKeyPress(event)" disabled>
             <button onclick="sendChat()" id="btn-chat" disabled>发送</button>
         </div>
     </div>
 </div>
 
+<div id="imgModal" class="modal" onclick="closeModal()">
+    <span class="close-btn" onclick="closeModal()">&times;</span>
+    <div class="modal-content-wrapper" onclick="event.stopPropagation()">
+        <div id="modalContent"></div>
+    </div>
+</div>
+
 <script>
+    // === Mermaid 初始化 ===
+    mermaid.initialize({ 
+        startOnLoad: false, 
+        theme: 'neutral', // 清爽灰白风格
+        securityLevel: 'loose' 
+    });
+
     const API_BASE = "http://127.0.0.1:8000";
     let fullReportMarkdown = "";
 
@@ -228,23 +386,115 @@
         }
     });
 
+    // === 模态框逻辑 ===
+    function openModal(svgContent) {
+    const modal = document.getElementById('imgModal');
+    const content = document.getElementById('modalContent');
+    
+    // 复制 SVG 内容
+    content.innerHTML = svgContent;
+    
+    // 调整样式以适应全屏
+    const svg = content.querySelector('svg');
+    if (svg) {
+        // 1. 移除最大宽度限制，允许它撑开
+        svg.style.maxWidth = 'none'; 
+        svg.style.height = 'auto';
+        
+        // 2. 核心修复：依据 viewBox 强制设置宽度
+        // 如果 SVG 有定义原始尺寸 (viewBox)，就用原始尺寸作为 CSS width
+        // 这样可以确保大图（如流程图）以原始分辨率渲染，从而触发滚动条
+        if(svg.viewBox && svg.viewBox.baseVal) {
+            // 加上 20px padding 避免贴边
+            const naturalWidth = svg.viewBox.baseVal.width;
+            
+            // 逻辑：如果原始宽度小于屏幕，就用 100% 撑满；如果原始宽度大于屏幕，就用原始宽度
+            // 这样既能保证小图不模糊，也能保证大图能看清且可滚动
+            svg.style.width = `max(100%, ${naturalWidth}px)`;
+        } else {
+            // 兜底：如果没有 viewBox，直接设为 100%
+            svg.style.width = '100%';
+        }
+    }
+    modal.style.display = "flex";
+}
+
+    function closeModal() {
+        document.getElementById('imgModal').style.display = "none";
+    }
+
+    document.addEventListener('keydown', function(event) {
+        if (event.key === "Escape") closeModal();
+    });
+
+    // === Mermaid 渲染与交互绑定 ===
+    async function renderMermaidDiagrams(rootNode) {
+        if (!rootNode) return;
+        const blocks = rootNode.querySelectorAll('code.language-mermaid');
+        if (blocks.length === 0) return;
+
+        const processPromises = [];
+        
+        for (let i = 0; i < blocks.length; i++) {
+            const block = blocks[i];
+            const code = block.textContent;
+            const pre = block.parentElement; 
+            
+            const id = `mermaid-${Date.now()}-${i}`;
+            const div = document.createElement('div');
+            div.id = id;
+            div.className = 'mermaid';
+            div.textContent = code;
+            
+            pre.replaceWith(div);
+            processPromises.push(div);
+        }
+
+        try {
+            await mermaid.run({ nodes: processPromises });
+
+            // 渲染完成后，绑定点击事件
+            processPromises.forEach(div => {
+                const svg = div.querySelector('svg');
+                if (svg) {
+                    div.onclick = function() {
+                        openModal(div.innerHTML);
+                    };
+                    // 允许容器内小幅横向滚动
+                    div.style.overflowX = 'auto';
+                    svg.style.maxWidth = '100%'; 
+                }
+            });
+        } catch (e) {
+            console.error("Mermaid rendering failed:", e);
+        }
+    }
+
     // 业务逻辑
     function startAnalysis() {
         const url = document.getElementById('repoUrl').value.trim();
-        if (!url) { alert("请输入 URL"); return; }
+        if (!url) { alert("Please Enter URL"); return; }
+        
+        // === [修改] 获取选中的语言选项 ===
+        const lang = document.querySelector('input[name="lang"]:checked').value;
+        // ============================
+
         const logDiv = document.getElementById('logs');
         const reportDiv = document.getElementById('report');
         const btnAnalyze = document.getElementById('btn-analyze');
         
-        logDiv.innerHTML = `<div>[System] 🚀 初始化 Agent (Session: ${SESSION_ID.substr(-6)})...</div>`;
-        reportDiv.innerHTML = "<div style='color:#94a3b8; text-align:center; margin-top:40px'>⏳ 正在深入分析代码架构...</div>";
+        // 增加语言显示
+        logDiv.innerHTML = `<div>[System] 🚀 Initialize Agent (Session: ${SESSION_ID.substr(-6)}, Lang: ${lang.toUpperCase()})...</div>`;
+        reportDiv.innerHTML = "<div style='color:#94a3b8; text-align:center; margin-top:40px'>⏳ Analyzing the code architecture in depth...</div>";
         fullReportMarkdown = "";
         
         btnAnalyze.disabled = true;
-        btnAnalyze.textContent = "分析中...";
+        btnAnalyze.textContent = "Analyzing...";
         toggleChat(false);
 
-        const eventSource = new EventSource(`${API_BASE}/analyze?url=${encodeURIComponent(url)}&session_id=${SESSION_ID}`);
+        // === [修改] 在 URL 中带上 language 参数 ===
+        const eventSource = new EventSource(`${API_BASE}/analyze?url=${encodeURIComponent(url)}&session_id=${SESSION_ID}&language=${lang}`);
+        
         eventSource.onmessage = function(event) {
             const data = JSON.parse(event.data);
             if (data.step === 'report_chunk') {
@@ -256,23 +506,27 @@
                 logAppend(`✅ ${data.message}`, "#15803d"); 
                 eventSource.close();
                 btnAnalyze.disabled = false;
-                btnAnalyze.textContent = "重新分析";
+                btnAnalyze.textContent = "Reanalysis";
                 toggleChat(true);
-                addMsg("ai", "🎉 分析完成！你可以提问了。");
+                addMsg("ai", "🎉 Analysis complete! You can ask questions now.");
+                
+                // 渲染左侧报告中的图表
+                renderMermaidDiagrams(reportDiv);
+
             } else if (data.step === 'error') {
                 logAppend(`❌ ${data.message}`, "#b91c1c"); 
                 eventSource.close();
                 btnAnalyze.disabled = false;
-                btnAnalyze.textContent = "开始分析";
+                btnAnalyze.textContent = "Analyze";
             } else {
                 logAppend(`👉 ${data.message}`);
             }
         };
         eventSource.onerror = function(err) {
-            logAppend("❌ 连接断开", "#b91c1c");
+            logAppend("❌ Disconnected", "#b91c1c");
             eventSource.close();
             btnAnalyze.disabled = false;
-            btnAnalyze.textContent = "开始分析";
+            btnAnalyze.textContent = "Analyze";
         };
     }
 
@@ -281,7 +535,6 @@
         const query = input.value.trim();
         if (!query) return;
 
-        // 1. 生成用户气泡 (ID 不会冲突)
         addMsg("user", query);
         input.value = "";
         
@@ -289,7 +542,6 @@
         input.disabled = true;
         btnChat.disabled = true;
         
-        // 2. 生成 AI 气泡 (延迟 10ms 确保 ID 绝对不同)
         let msgId;
         setTimeout(() => {
             msgId = addMsg("ai", "...");
@@ -307,7 +559,6 @@
             const decoder = new TextDecoder("utf-8");
             let fullText = "";
             
-            // 确保 msgId 已经生成后再开始更新 DOM
             const msgDiv = await waitForElement(() => document.getElementById(msgId));
 
             while (true) {
@@ -319,8 +570,11 @@
                 const history = document.getElementById('chat-history');
                 history.scrollTop = history.scrollHeight;
             }
+            
+            // 渲染对话气泡中的图表
+            await renderMermaidDiagrams(msgDiv);
+
         } catch (err) {
-            // 如果出错时 msgId 还没生成 (极罕见)，就手动生成一个
             if (!msgId) msgId = addMsg("ai", "");
             const div = document.getElementById(msgId);
             if(div) div.innerHTML += `<br><span style="color:red">❌ Error: ${err.message}</span>`;
@@ -331,7 +585,6 @@
         }
     }
 
-    // === 辅助工具: 等待 DOM 元素生成 ===
     function waitForElement(getter, timeout=2000) {
         return new Promise((resolve, reject) => {
             const start = Date.now();
@@ -354,12 +607,10 @@
         container.scrollTop = container.scrollHeight;
     }
 
-    // === 核心修复: 加上随机数防止 ID 冲突 ===
     function addMsg(role, content) {
         const history = document.getElementById('chat-history');
         const div = document.createElement('div');
         div.className = `msg ${role} markdown-body`;
-        // ID = 时间戳 + 随机数 (彻底解决冲突)
         div.id = "msg-" + Date.now() + "-" + Math.random().toString(36).substr(2, 9);
         div.innerHTML = marked.parse(content);
         history.appendChild(div);

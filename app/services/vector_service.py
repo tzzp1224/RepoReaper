@@ -1,11 +1,22 @@
 # 文件路径: app/services/vector_service.py
 import chromadb
 from chromadb.config import Settings as ChromaSettings
-from app.utils.llm_client import client
 from app.core.config import settings
 from rank_bm25 import BM25Okapi
+# from sentence_transformers import SentenceTransformer  <-- 删除这行，太占内存
+from openai import AsyncOpenAI  
 import re
 import time
+import os
+
+# 初始化本地 Embedding 模型 (单例)
+client = AsyncOpenAI(
+    api_key=settings.SILICON_API_KEY, 
+    base_url="https://api.siliconflow.cn/v1"
+)
+EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
+
+print(f"✅ Embedding Model: {EMBEDDING_MODEL_NAME}")
 
 class VectorStore:
     def __init__(self, session_id: str):
@@ -13,11 +24,10 @@ class VectorStore:
         self.chroma_client = chromadb.Client(ChromaSettings(anonymized_telemetry=False))
         self.collection_name = f"repo_{session_id}"
         
-        # === 新增：元数据存储 ===
-        self.repo_url = None       # 记住仓库地址，供 Chat 阶段下载新文件
-        self.indexed_files = set() # 记住已索引的文件，避免重复下载
+        self.repo_url = None
+        self.indexed_files = set() 
+        self.global_context = {}
         
-        # Hybrid Search 组件
         self.bm25 = None
         self.doc_store = [] 
         
@@ -33,85 +43,89 @@ class VectorStore:
         self.doc_store = []
         self.repo_url = None
         self.indexed_files = set()
+        self.global_context = {} # 重置时清空
         print(f"🧹 [Session: {self.session_id}] 数据库已重置")
 
-    def embed_text(self, text):
-        if not client: return []
+    async def embed_text(self, text):  # <--- 改为 async
+        """异步调用 API 生成向量"""
         try:
-            result = client.models.embed_content(
-                model=settings.EMBEDDING_MODEL,
-                contents=text
+            text = text.replace("\n", " ")
+            response = await client.embeddings.create( # <--- await
+                input=[text],
+                model=EMBEDDING_MODEL_NAME
             )
-            return result.embeddings[0].values
+            return response.data[0].embedding
         except Exception as e:
-            print(f"❌ Embedding Error: {e}")
+            print(f"❌ API Embedding Error: {e}")
             return []
 
     def _tokenize(self, text):
         return [t.lower() for t in re.split(r'[^a-zA-Z0-9]', text) if t.strip()]
 
-    def add_documents(self, documents, metadatas):
+    async def add_documents(self, documents, metadatas): # <--- 改为 async
         if not documents: return
         
         embeddings = []
         ids = []
         
+        # === 批量生成 Embedding (API 优化) ===
+        try:
+            # 注意：大部分 API 单次请求限制 batch size (如 100 或 2048)
+            # 如果 documents 很大，建议分批调用
+            batch_size = 20  
+            for i in range(0, len(documents), batch_size):
+                batch_docs = documents[i : i + batch_size]
+                # 清洗换行符
+                batch_docs_clean = [d.replace("\n", " ") for d in batch_docs]
+                
+                response = await client.embeddings.create(
+                    input=batch_docs_clean,
+                    model=EMBEDDING_MODEL_NAME
+                )
+                # 按顺序提取 embedding
+                batch_embeddings = [item.embedding for item in response.data]
+                embeddings.extend(batch_embeddings)
+                
+        except Exception as e:
+            print(f"❌ Batch API Embedding Error: {e}")
+            return
+
         for i, doc in enumerate(documents):
-            # 记录已索引的文件名
             self.indexed_files.add(metadatas[i]['file'])
-            
             doc_id = f"{metadatas[i]['file']}_{len(self.doc_store) + i}"
+            
             self.doc_store.append({
                 "id": doc_id,
                 "content": doc,
                 "metadata": metadatas[i]
             })
-            
-            emb = self.embed_text(doc)
-            if emb:
-                embeddings.append(emb)
-                ids.append(doc_id)
+            ids.append(doc_id)
 
         if embeddings:
             self.collection.add(documents=documents, embeddings=embeddings, metadatas=metadatas, ids=ids)
         
-        # 重建 BM25
         tokenized_corpus = [self._tokenize(doc['content']) for doc in self.doc_store]
         self.bm25 = BM25Okapi(tokenized_corpus)
         
         print(f"✅ [Session: {self.session_id}] 增量索引完成，当前文档数: {len(self.doc_store)}")
 
-
-    # === 新增方法：按文件名强制检索 ===
     def get_documents_by_file(self, file_path):
-        """
-        从内存 doc_store 中直接提取指定文件的所有切片，
-        并转换为标准格式（包含 top-level 'file' 键）。
-        """
-        # 1. 筛选原始文档
-        raw_docs = [
-            doc for doc in self.doc_store 
-            if doc['metadata']['file'] == file_path
-        ]
-        
-        # 2. 格式化转换 (Fix KeyError: 'file')
+        raw_docs = [doc for doc in self.doc_store if doc['metadata']['file'] == file_path]
         formatted_docs = []
         for d in raw_docs:
             formatted_docs.append({
                 "id": d['id'],
                 "content": d['content'],
-                "file": d['metadata']['file'], # <--- 关键修复：手动添加 file 键
+                "file": d['metadata']['file'],
                 "metadata": d['metadata'],
-                "score": 1.0 # 强制提取的视为满分
+                "score": 1.0
             })
-            
-        # 3. 按行号排序
         return sorted(formatted_docs, key=lambda x: x['metadata'].get('start_line', 0))
     
-    def search_hybrid(self, query, top_k=3):
-        # 1. 向量检索 (Vector Search)
+    async def search_hybrid(self, query, top_k=3):
         vector_results = []
-        query_embedding = self.embed_text(query)
+        query_embedding = await self.embed_text(query)
+        
         if query_embedding:
             chroma_res = self.collection.query(
                 query_embeddings=[query_embedding], n_results=top_k * 2
@@ -125,11 +139,10 @@ class VectorStore:
                         "id": ids[i], 
                         "content": docs[i], 
                         "file": metas[i]['file'], 
-                        "metadata": metas[i],  # <--- 🚨【修复点1】必须加上这行
+                        "metadata": metas[i],
                         "score": 0
                     })
 
-        # 2. BM25 检索
         bm25_results = []
         if self.bm25:
             tokenized_query = self._tokenize(query)
@@ -143,11 +156,10 @@ class VectorStore:
                         "id": item["id"], 
                         "content": item["content"], 
                         "file": item["metadata"]["file"], 
-                        "metadata": item["metadata"], # <--- 🚨【修复点2】必须加上这行
+                        "metadata": item["metadata"],
                         "score": 0
                     })
 
-        # 3. Weighted RRF Fusion
         k = 60
         weight_vector = 1.0
         weight_bm25 = 0.3
