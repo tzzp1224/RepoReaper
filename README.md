@@ -1,134 +1,135 @@
-# GitHub RAG Agent
+<div align="center">
 
-![License](https://img.shields.io/badge/license-MIT-blue)
-![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.109-green)
-![Status](https://img.shields.io/badge/status-active-success)
+  <img src="./docs/logo.png" width="220" height="auto" alt="RepoReaper Logo">
 
-[简体中文 (Chinese Version)](README_CN.md)
+  <h1>RepoReaper</h1>
 
-## Overview
+  <h3>
+    💀 Harvest Logic. Dissect Architecture. Chat with Code.
+    <br>
+    基于 AST 深度解析 · 双语适配的自治型代码审计 Agent
+  </h3>
 
-The **GitHub RAG Agent** is an autonomous code analysis system designed to facilitate rapid understanding of complex codebases. Leveraging **Google Gemini** models and **Retrieval-Augmented Generation (RAG)** technology, this system goes beyond simple chat interfaces by implementing a complete agentic workflow.
+  <p>
+    <a href="./README.md">English</a> • 
+    <a href="./README_zh.md">简体中文</a>
+  </p>
+  <a href="./LICENSE">
+    <img src="https://img.shields.io/github/license/yourname/reporeaper?style=flat-square&color=blue" alt="License">
+  </a>
+  <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python Version">
+  <img src="https://img.shields.io/badge/Model-DeepSeek_V3-673AB7?style=flat-square&logo=openai&logoColor=white" alt="DeepSeek Powered">
+  <img src="https://img.shields.io/badge/Agent-ReAct_Pattern-orange?style=flat-square" alt="Agent Architecture">
 
-The agent autonomously perceives the repository structure, plans which critical files to analyze to minimize token usage, indexes the codebase into a vector database, and provides grounded answers to architectural and logical queries.
+  <br>
 
-## Key Features
+  <img src="https://img.shields.io/badge/RAG-Hybrid_Search-009688?style=flat-square" alt="RAG">
+  <img src="https://img.shields.io/badge/Parser-Python_AST-FFD700?style=flat-square&labelColor=black" alt="AST Parsing">
+  <img src="https://img.shields.io/badge/VectorDB-Chroma-important?style=flat-square" alt="ChromaDB">
+  <img src="https://img.shields.io/badge/Framework-FastAPI-005571?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
 
-* **Agentic Planning**: Automatically fetches the repository file tree and utilizes an LLM planner to identify the top 3-5 critical files for analysis, ensuring efficient token consumption.
-* **Retrieval-Augmented Generation (RAG)**: Integrates ChromaDB to generate and store vector embeddings of code segments, enabling high-precision context retrieval for user queries.
-* **Real-time Event Streaming**: Utilizes Server-Sent Events (SSE) to provide real-time feedback on the agent's operational status, including connection, planning, downloading, and indexing stages.
-* **Engineering-Grade Architecture**: Refactored from flat scripts into a modular, service-oriented architecture suitable for scalability and maintenance.
+  <br>
+  <br>
 
-## System Architecture
+  <img src="./docs/demo_preview.gif" width="800" alt="RepoReaper Demo">
 
-The system follows a modular design separating the API layer, business logic, and data storage.
+  <br>
+</div>
 
-[![](https://mermaid.ink/img/pako:eNp1UtuOmzAQ_RXLT62UpTHkUniolIUku9JWijZRK5XsgwOTxBLYyJjtpiH_3jGXNo26lmAuzJkzc_CZJioFGtCD5sWRbKKtJHjCTIA08XfYde4Lubv7Uj9sNqtP6_W8JrPVY7zgpUFL5tLo00sLtLGtjERZcJMca7IG_SoSiGcHbNNHXXX7Lqtdy76lodLQ15Rb2n63p8s1vZlDFoC9yUYD1GQpzEO1i1tzQ3ALdR0MM0gMWYgMypqsMi4l6Pjp6WvvvwP1HDLPd5CSEAWryTdsonR0H7fODS_I9J0NH-Veo266Skyl4XrFbgHL1bkoZk2eIVcGnqFQcesS65cCSU9Xo_bzNPhm0FTIA24YHrXKefyhtdH9xytQt3GDwcFAg0ysopALKeKlUocMusgO8__l_mEOlTTwZnBGowW88gwXmC1jfDBVFkqmfwS2OQuZyfIn6Lq7aHSAV1GkNECJYEBz0Dm3IT1b1JaaI-QoW4BuCnteZcZqeEFYweUPpfIeqVV1ONJgz7MSo6pIuYFIcPwPf0vAjhOqCmkDlw2bHjQ40zcajIfOkLnjiTvx2efp2J2OBvREAzZmznTk-5gcsaHrscuA_mpYmcN85k89f-JPPOZ6k9HlN_ZsD98?type=png)](https://mermaid.live/edit#pako:eNp1UtuOmzAQ_RXLT62UpTHkUniolIUku9JWijZRK5XsgwOTxBLYyJjtpiH_3jGXNo26lmAuzJkzc_CZJioFGtCD5sWRbKKtJHjCTIA08XfYde4Lubv7Uj9sNqtP6_W8JrPVY7zgpUFL5tLo00sLtLGtjERZcJMca7IG_SoSiGcHbNNHXXX7Lqtdy76lodLQ15Rb2n63p8s1vZlDFoC9yUYD1GQpzEO1i1tzQ3ALdR0MM0gMWYgMypqsMi4l6Pjp6WvvvwP1HDLPd5CSEAWryTdsonR0H7fODS_I9J0NH-Veo266Skyl4XrFbgHL1bkoZk2eIVcGnqFQcesS65cCSU9Xo_bzNPhm0FTIA24YHrXKefyhtdH9xytQt3GDwcFAg0ysopALKeKlUocMusgO8__l_mEOlTTwZnBGowW88gwXmC1jfDBVFkqmfwS2OQuZyfIn6Lq7aHSAV1GkNECJYEBz0Dm3IT1b1JaaI-QoW4BuCnteZcZqeEFYweUPpfIeqVV1ONJgz7MSo6pIuYFIcPwPf0vAjhOqCmkDlw2bHjQ40zcajIfOkLnjiTvx2efp2J2OBvREAzZmznTk-5gcsaHrscuA_mpYmcN85k89f-JPPOZ6k9HlN_ZsD98)
+---
 
-## Project Structure
 
-The project adopts a domain-driven package structure:
 
-Plaintext
+**An intelligent, agentic system for automated architectural analysis and semantic code search.**
 
-```
-github-rag-agent/
-├── app/
-│   ├── core/
-│   │   └── config.py          # Centralized configuration management
-│   ├── services/
-│   │   ├── agent_service.py   # Core orchestration logic
-│   │   ├── github_service.py  # GitHub API interaction adapter
-│   │   └── vector_service.py  # Vector database management (ChromaDB)
-│   ├── utils/
-│   │   └── llm_client.py      # LLM client wrapper
-│   └── main.py                # Application entry point and router
-├── frontend/
-│   └── index.html             # Client-side interface
-├── .env                       # Environment variables
-├── requirements.txt           # Project dependencies
-└── README.md                  # Documentation
-```
+This project transcends traditional "Chat with Code" paradigms by implementing an autonomous Agent that mimics the cognitive process of a Senior Tech Lead. Instead of statically indexing a repository, the system treats the Large Language Model (LLM) as the CPU and the Vector Store as a high-speed **Context Cache**. The agent dynamically traverses the repository structure, pre-fetching critical contexts into the "cache" (RAG) and performing Just-In-Time (JIT) reads when semantic gaps are detected.
 
-## Installation and Usage
+---
 
-### Prerequisites
+## 🚀 Core Philosophy: RAG as an Intelligent Cache
 
-- Python 3.9 or higher
-- Google Gemini API Key
-- GitHub Access Token (Classic)
+In traditional code assistants, RAG (Retrieval-Augmented Generation) is often a static lookup table. In this architecture, we redefine RAG as a **Dynamic L2 Cache** for the LLM:
 
-### Setup
+1.  **Cold Start (Repo Map):** The agent first parses the Abstract Syntax Tree (AST) of the entire repository to build a lightweight symbol map (Classes/Functions). This serves as the "index" to the file system.
+2.  **Prefetching (Analysis Phase):** During the initial analysis, the agent autonomously selects the most critical 10-20 files based on architectural relevance, parses them, and "warms up" the vector store (the cache).
+3.  **Cache Miss Handling (ReAct Loop):** During user Q&A, if the retrieval mechanism (BM25 + Vector) returns insufficient context, the Agent triggers a **Just-In-Time (JIT)** file read. It autonomously tools the GitHub API to fetch missing files, updates the cache in real-time, and re-generates the answer.
 
-1. **Clone the repository**
+---
 
-   Bash
+## 🏗 System Architecture & Innovations
 
-   ```
-   git clone [https://github.com/your-username/github-rag-agent.git](https://github.com/your-username/github-rag-agent.git)
-   cd github-rag-agent
-   ```
+### 1. AST-Aware Semantic Chunking
+Standard text chunking destroys code logic. We utilize Python's `ast` module to implement **Structure-Aware Chunking**.
+* **Logical Boundaries:** Code is split by Class and Method definitions, ensuring that a function is never severed in the middle.
+* **Context Injection:** Large classes are decomposed into methods, but the parent class's signature and docstrings are injected into every child chunk. This ensures the LLM understands the "why" (class purpose) even when looking at the "how" (method implementation).
 
-2. **Install dependencies**
+### 2. Asynchronous Concurrency Pipeline
+Built on top of `asyncio` and `httpx`, the system is designed for high-throughput I/O operations.
+* **Non-Blocking Ingestion:** Repository parsing, AST extraction, and vector embedding occur concurrently.
+* **Worker Scalability:** The application runs behind Gunicorn with Uvicorn workers, utilizing a stateless design pattern where the Vector Store Manager synchronizes context via persistent disk storage and shared ChromaDB instances. This allows multiple workers to serve requests without race conditions.
 
-   Bash
+### 3. The "Just-In-Time" ReAct Agent
+The Chat Service implements a sophisticated **Reasoning + Acting (ReAct)** loop:
+* **Query Rewrite:** User queries (often vague or in different languages) are first rewritten by an LLM into precise, English-language technical keywords for optimal BM25/Vector retrieval.
+* **Self-Correction:** If the retrieved context is insufficient, the model does not hallucinate. Instead, it issues a `<tool_code>` command to fetch specific file paths from the repository. The system intercepts this command, pulls the fresh data, indexes it, and feeds it back to the model in a single inference cycle.
 
-   ```
-   pip install -r requirements.txt
-   ```
+### 4. Hybrid Search Mechanism
+To balance semantic understanding with exact keyword matching, the retrieval engine employs a weighted hybrid approach:
+* **Dense Retrieval (Vector):** Uses `BAAI/bge-m3` embeddings to find conceptually similar code (e.g., matching "authentication" to "login logic").
+* **Sparse Retrieval (BM25):** Captures exact variable names, error codes, and specific function signatures that vector embeddings might miss.
+* **Reciprocal Rank Fusion (RRF):** Results are fused and re-ranked to ensure the highest fidelity context is provided to the LLM.
 
-3. **Environment Configuration** Create a `.env` file in the root directory:
+### 5. Native Bilingual Support
+The architecture is completely language-agnostic but optimized for dual-language environments (English/Chinese).
+* **Dynamic Prompt Engineering:** The system detects the user's input language and hot-swaps the System Prompts to ensure the output format, tone, and technical terminology align with the user's locale.
+* **UI Integration:** The frontend includes a dedicated language toggle that influences the entire generation pipeline, from the initial architectural report to the final Q&A.
 
-   Ini, TOML
+---
 
-   ```
-   GEMINI_API_KEY=your_api_key
-   GITHUB_TOKEN=your_github_token
-   ```
+## 🛠 Technical Stack
 
-### Running the Application
+* **Core:** Python 3.10+, FastAPI, AsyncIO
+* **LLM Integration:** OpenAI SDK (compatible with DeepSeek/SiliconFlow)
+* **Vector Database:** ChromaDB (Persistent Storage)
+* **Search Algorithms:** BM25Okapi, Rank-BM25
+* **Parsing:** Python `ast` (Abstract Syntax Trees)
+* **Frontend:** HTML5, Server-Sent Events (SSE) for real-time streaming, Mermaid.js for architecture diagrams.
+* **Deployment:** Docker, Gunicorn, Uvicorn.
 
-1. **Start the Backend** Use the module execution method to ensure proper package resolution:
+---
 
-   Bash
+## ⚡ Performance Optimization
 
-   ```
-   python -m app.main
-   ```
+* **Session Management:** Uses browser `sessionStorage` coupled with server-side persistent contexts, allowing users to refresh pages without losing the "warm" cache state.
+* **Network Resilience:** Implements robust error handling for GitHub API rate limits (403/429) and network timeouts during long-context generation.
+* **Memory Efficiency:** The `VectorStoreManager` is designed to be stateless in memory but stateful on disk, preventing memory leaks in long-running container environments.
 
-   The server will start at `http://127.0.0.1:8000`.
+---
 
-2. **Access the Client** Open `frontend/index.html` in a modern web browser.
+## 🏁 Quick Start
 
-## API Endpoints
+**Prerequisites:** Python 3.9+ and a GitHub Token.
 
-- `GET /analyze?url={repo_url}`: Initiates the SSE stream for repository analysis.
-- `POST /chat`: Accepts a JSON payload `{"query": "..."}` and returns a RAG-based response with source citations.
-- `GET /`: Health check endpoint.
+1.  **Clone the Repository**
+    ```bash
+    git clone [repo_url]
+    cd [repo_name]
+    ```
 
-## Future Optimization Roadmap
+2.  **Environment Setup**
+    Configure your `.env` file with `GITHUB_TOKEN` and `SILICON_API_KEY` (or other LLM provider keys).
 
-### 1. Vector Storage Persistence
+3.  **Run with Gunicorn (Production Mode)**
+    ```bash
+    gunicorn -c gunicorn_conf.py app.main:app
+    ```
 
-- **Current State**: ChromaDB runs in ephemeral (in-memory) mode. Data is lost upon server restart.
-- **Optimization**: Configure ChromaDB to use persistent disk storage or integrate with a cloud-native vector database (e.g., Pinecone, Milvus) to cache analyzed repositories.
+4.  **Access the Dashboard**
+    Navigate to `http://localhost:8000`. Enter a GitHub repository URL to trigger the autonomous analysis agent.
 
-### 2. Advanced Chunking Strategies
 
-- **Current State**: Basic file-level truncation or character splitting.
-- **Optimization**: Implement AST-based (Abstract Syntax Tree) chunking for Python/JS code to ensure vector chunks respect function and class boundaries, improving retrieval accuracy.
 
-### 3. Session Management
 
-- **Current State**: Single global vector store instance.
-- **Optimization**: Implement session-based isolation to allow multiple users to analyze different repositories simultaneously without data cross-contamination.
 
-### 4. LLM Flexibility
-
-- **Current State**: Tightly coupled with Google Gemini SDK.
-- **Optimization**: Abstract the LLM interface (using LangChain or a custom adapter pattern) to support OpenAI, Anthropic, or local LLMs (via Ollama).
-
-## License
-
-This project is licensed under the MIT License.
+\## 📈 Star History <a href="https://star-history.com/#tzzp1224/RepoReaper&Date"> <picture>   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date&theme=dark" />   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date" />   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date" /> </picture> </a>
