@@ -14,6 +14,7 @@
     <a href="./README.md">English</a> • 
     <strong>简体中文</strong>
   </p>
+
   <a href="./LICENSE">
     <img src="https://img.shields.io/github/license/tzzp1224/RepoReaper?style=flat-square&color=blue" alt="License">
   </a>
@@ -30,6 +31,30 @@
   <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
 
   <br>
+  <br>
+
+  <p>
+    <b>👇 Live Demo Access / 在线体验 👇</b>
+  </p>
+
+  <p align="center">
+    <a href="https://realdexter-reporeaper.hf.space" target="_blank">
+      <img src="https://img.shields.io/badge/🤗%20Hugging%20Face-Global%20Demo-ffd21e?style=for-the-badge&logo=huggingface&logoColor=black" alt="Global Demo" height="45">
+    </a>
+
+    &nbsp;&nbsp;&nbsp; <a href="https://realdexter.com/" target="_blank">
+      <img src="https://img.shields.io/badge/🚀%20Seoul%20Server-CN%20Optimized-red?style=for-the-badge&logo=rocket&logoColor=white" alt="China Demo" height="45">
+    </a>
+  </p>
+
+  <p align="center">
+    <small style="color: #666;">
+      ⚠️ <strong>Public Demo Limitations</strong>: Hosted instances use shared API quotas. If you encounter rate limits (403/429), please <strong>deploy locally</strong> for the best experience.
+      <br>
+      ⚠️ <strong>演示环境说明</strong>: 中国用户请使用 SEOUL SERVER。在线服务使用共享 API 配额。如遇请求受限或响应缓慢，强烈建议 <strong>Clone 本地运行</strong> 以获取无限制的极速体验。
+    </small>
+  </p>
+
   <br>
 
   <img src="./docs/demo_preview.gif" width="800" style="max-width: 100%; box-shadow: 0 4px 8px rgba(0,0,0,0.1); border-radius: 8px;" alt="RepoReaper Demo">
