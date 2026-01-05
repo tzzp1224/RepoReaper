@@ -1,6 +1,6 @@
 <div align="center">
 
-  <img src="./docs/logo.jgp" width="220" height="auto" alt="RepoReaper Logo">
+  <img src="./docs/logo.jpg" width="220" height="auto" alt="RepoReaper Logo">
 
   <h1>RepoReaper</h1>
 
