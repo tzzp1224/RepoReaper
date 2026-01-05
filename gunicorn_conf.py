@@ -15,8 +15,7 @@ worker_class = "uvicorn.workers.UvicornWorker"
 # 超时时间：分析大库时可能需要较长时间，设大一点
 timeout = 600
 keepalive = 5
-# 建议开启 preload，节省内存（利用 Linux Copy-on-Write 机制）
-preload_app = True
+
 
 # 日志
 accesslog = "-"
