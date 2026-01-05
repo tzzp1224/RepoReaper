@@ -99,28 +99,60 @@ Chat Service 实现了一套完整的推理闭环：
 
 ## 🏁 快速开始
 
-**前置要求:** Python 3.9+ 以及 GitHub Token。
+**前置要求:**
+* Python 3.9+
+* 有效的 GitHub Token
+* 大模型 API Key（推荐使用 DeepSeek-V3 + SiliconFlow 免费版 bge-m3）。
 
 1.  **克隆仓库**
     ```bash
-    git clone [https://github.com/yourname/reporeaper.git](https://github.com/yourname/reporeaper.git)
-    cd reporeaper
+    git clone [https://github.com/tzzp1224/RepoReaper.git](https://github.com/tzzp1224/RepoReaper.git)
+    cd RepoReaper
     ```
 
-2.  **配置环境**
-    创建 `.env` 文件并填入你的 API Key：
+2.  **安装依赖**
+    建议使用虚拟环境以避免依赖冲突：
+    ```bash
+    # 创建并激活虚拟环境
+    python -m venv venv
+    source venv/bin/activate  # Windows 用户使用: venv\Scripts\activate
+    
+    # 安装依赖
+    pip install -r requirements.txt
+    ```
+
+3.  **配置环境**
+    在项目根目录下复制 `.env.example` 或新建 `.env` 文件：
     ```env
-    GITHUB_TOKEN=ghp_xxxx
-    SILICON_API_KEY=sk_xxxx  # 推荐使用 DeepSeek
+    # GitHub 访问令牌 (用于读取仓库)
+    GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxx
+    
+    # LLM 服务商 Key (如 DeepSeek)
+    DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxx
+    
+    # Embedding 服务商 Key (SiliconFlow 提供免费 bge-m3)
+    SILICON_API_KEY=sk-xxxxxxxxxxxxxxx
     ```
 
-3.  **启动服务 (生产模式)**
-    使用 Gunicorn 启动多 Worker 模式：
+4.  **启动服务**
+
+    **方式 A：本地运行 (Gunicorn)**
+    适用于开发或直接部署：
     ```bash
     gunicorn -c gunicorn_conf.py app.main:app
     ```
 
-4.  **开始审计**
+    **方式 B：Docker 容器化运行 🐳**
+    无需配置本地 Python 环境，直接一键启动：
+    ```bash
+    # 1. 构建镜像
+    docker build -t reporeaper .
+    
+    # 2. 启动容器 (挂载 .env 文件)
+    docker run -d -p 8000:8000 --env-file .env --name reporeaper reporeaper
+    ```
+
+5.  **开始审计**
     浏览器访问 `http://localhost:8000`，输入任意 GitHub 仓库地址，观察 RepoReaper 如何“收割”代码架构。
 
 ---
@@ -128,7 +160,9 @@ Chat Service 实现了一套完整的推理闭环：
 ## 📈 Star History
 
 <a href="https://star-history.com/#tzzp1224/RepoReaper&Date">
-
- <picture>   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date&theme=dark" />   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date" />   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date" />
-
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date" />
+ </picture>
 </a>

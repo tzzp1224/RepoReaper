@@ -107,26 +107,63 @@ The architecture is completely language-agnostic but optimized for dual-language
 
 ---
 
-## 🏁 Quick Start
-
-**Prerequisites:** Python 3.9+ and a GitHub Token.
-
-1.  **Clone the Repository**
-    ```bash
-    git clone [repo_url]
-    cd [repo_name]
-    ```
-
-2.  **Environment Setup**
-    Configure your `.env` file with `GITHUB_TOKEN` and `SILICON_API_KEY` (or other LLM provider keys).
-
-3.  **Run with Gunicorn (Production Mode)**
-    ```bash
-    gunicorn -c gunicorn_conf.py app.main:app
-    ```
-
-4.  **Access the Dashboard**
-    Navigate to `http://localhost:8000`. Enter a GitHub repository URL to trigger the autonomous analysis agent.
+4.  ## 🏁 Quick Start
+    
+    **Prerequisites:**
+    * Python 3.9+
+    * Valid GitHub Token
+    * LLM API Keys (DeepSeek-V3 & SiliconFlow bge-m3 recommended).
+    
+    1.  **Clone the Repository**
+        ```bash
+        git clone [https://github.com/tzzp1224/RepoReaper.git](https://github.com/tzzp1224/RepoReaper.git)
+        cd RepoReaper
+        ```
+    
+    2.  **Install Dependencies**
+        Using a virtual environment is recommended:
+        ```bash
+        # Create and activate venv
+        python -m venv venv
+        source venv/bin/activate  # Windows: venv\Scripts\activate
+        
+        # Install requirements
+        pip install -r requirements.txt
+        ```
+    
+    3.  **Configure Environment**
+        Create a `.env` file in the root directory:
+        ```env
+        # GitHub Personal Access Token
+        GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxx
+        
+        # LLM API Key (e.g., DeepSeek)
+        DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxx
+        
+        # Embedding API Key (SiliconFlow)
+        SILICON_API_KEY=sk-xxxxxxxxxxxxxxx
+        ```
+    
+    4.  **Start the Service**
+    
+        **Option A: Local Run (Gunicorn)**
+        Best for development:
+        ```bash
+        gunicorn -c gunicorn_conf.py app.main:app
+        ```
+    
+        **Option B: Docker Run 🐳**
+        Run in an isolated container:
+        ```bash
+        # 1. Build Image
+        docker build -t reporeaper .
+        
+        # 2. Run Container (loading env vars)
+        docker run -d -p 8000:8000 --env-file .env --name reporeaper reporeaper
+        ```
+    
+    5.  **Access Dashboard**
+        Navigate to `http://localhost:8000`. Enter a GitHub repository URL to trigger the autonomous analysis agent.
 
 
 
