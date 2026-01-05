@@ -15,7 +15,7 @@
     <a href="./README_zh.md">简体中文</a>
   </p>
   <a href="./LICENSE">
-    <img src="https://img.shields.io/github/license/yourname/reporeaper?style=flat-square&color=blue" alt="License">
+    <img src="https://img.shields.io/github/license/tzzp1224/RepoReaper?style=flat-square&color=blue" alt="License">
   </a>
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python Version">
   <img src="https://img.shields.io/badge/Model-DeepSeek_V3-673AB7?style=flat-square&logo=openai&logoColor=white" alt="DeepSeek Powered">
