@@ -13,7 +13,7 @@ workers = 1
 worker_class = "uvicorn.workers.UvicornWorker"
 
 # 超时时间：分析大库时可能需要较长时间，设大一点
-timeout = 300
+timeout = 600
 keepalive = 5
 
 # 日志
