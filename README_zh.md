@@ -36,16 +36,7 @@
   <p>
     <b>👇 Live Demo Access / 在线体验 👇</b>
   </p>
-
-  <p align="center">
-    <a href="https://realdexter-reporeaper.hf.space" target="_blank">
-      <img src="https://img.shields.io/badge/🤗%20Hugging%20Face-Global%20Demo-ffd21e?style=for-the-badge&logo=huggingface&logoColor=black" alt="Global Demo" height="45">
-    </a>
-
-    &nbsp;&nbsp;&nbsp; <a href="https://realdexter.com/" target="_blank">
-      <img src="https://img.shields.io/badge/🚀%20Seoul%20Server-CN%20Optimized-red?style=for-the-badge&logo=rocket&logoColor=white" alt="China Demo" height="45">
-    </a>
-  </p>
+  <p align="center">     <a href="https://realdexter-reporeaper.hf.space" target="_blank">       <img src="https://img.shields.io/badge/🤗%20Hugging%20Face-Global%20Demo-ffd21e?style=for-the-badge&logo=huggingface&logoColor=black" alt="Global Demo" height="45">     </a>          &nbsp;&nbsp;&nbsp; <a href="https://realdexter.com/" target="_blank">       <img src="https://img.shields.io/badge/🚀%20Seoul%20Server-CN%20Optimized-red?style=for-the-badge&logo=rocket&logoColor=white" alt="China Demo" height="45">     </a>   </p>
 
   <p align="center">
     <small style="color: #666;">
