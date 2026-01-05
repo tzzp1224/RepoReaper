@@ -4,6 +4,7 @@ from chromadb.config import Settings as ChromaSettings
 from app.core.config import settings
 from rank_bm25 import BM25Okapi
 from openai import AsyncOpenAI  
+import asyncio # 确保导入 asyncio
 import re
 import os
 import json
@@ -195,11 +196,20 @@ class VectorStore:
         vector_results = []
         query_embedding = await self.embed_text(query)
         
+        # ⚠️ 阻塞点 1：ChromaDB 查询是同步 I/O + 计算
+        # 使用 asyncio.to_thread 将其扔到线程池执行
+        def _chroma_query():
+            if query_embedding:
+                return self.collection.query(
+                    query_embeddings=[query_embedding], n_results=top_k * 2
+                )
+            return None
+
         if query_embedding:
-            chroma_res = self.collection.query(
-                query_embeddings=[query_embedding], n_results=top_k * 2
-            )
-            if chroma_res['ids']:
+            # 修改：异步执行同步的 Chroma 查询
+            chroma_res = await asyncio.to_thread(_chroma_query)
+            
+            if chroma_res and chroma_res['ids']:
                 ids = chroma_res['ids'][0]
                 docs = chroma_res['documents'][0]
                 metas = chroma_res['metadatas'][0]
@@ -215,11 +225,23 @@ class VectorStore:
         bm25_results = []
         if self.bm25:
             tokenized_query = self._tokenize(query)
-            doc_scores = self.bm25.get_scores(tokenized_query)
-            top_n = min(len(doc_scores), top_k * 2)
-            top_indices = sorted(range(len(doc_scores)), key=lambda i: doc_scores[i], reverse=True)[:top_n]
+            
+            # ⚠️ 阻塞点 2：BM25 计算是纯 CPU 密集型操作
+            # 这是导致卡顿的元凶，必须放入线程池
+            def _bm25_score():
+                doc_scores = self.bm25.get_scores(tokenized_query)
+                top_n = min(len(doc_scores), top_k * 2)
+                # 使用 numpy 或 python 原生排序，这里也需要在线程中完成
+                return sorted(range(len(doc_scores)), key=lambda i: doc_scores[i], reverse=True)[:top_n]
+
+            top_indices = await asyncio.to_thread(_bm25_score)
+            
             for idx in top_indices:
-                if doc_scores[idx] > 0:
+                # 获取分数需要重新访问 bm25 对象，简单起见在外面做
+                # 或者把整个逻辑封装进函数。为安全起见，简单获取即可。
+                # 注意：self.doc_store 访问通常很快，不一定要 wrap，但为了保险：
+                score = self.bm25.get_scores(tokenized_query)[idx]
+                if score > 0:
                     item = self.doc_store[idx]
                     bm25_results.append({
                         "id": item["id"], 
