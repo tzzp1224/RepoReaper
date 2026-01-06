@@ -160,23 +160,24 @@ The architecture is completely language-agnostic but optimized for dual-language
         SILICON_API_KEY=sk-xxxxxxxxxxxxxxx
         ```
     
-    4.  **Start the Service**
+    4. **Start the Service**
     
-        **Option A: Local Run (Gunicorn)**
-        Best for development:
-        ```bash
-        gunicorn -c gunicorn_conf.py app.main:app
-        ```
+       **Option A: Local Run (Universal)**
+       Compatible with Windows, macOS, and Linux. Recommended for development:        
     
-        **Option B: Docker Run 🐳**
-        Run in an isolated container:
-        ```bash
-        # 1. Build Image
-        docker build -t reporeaper .
-        
-        # 2. Run Container (loading env vars)
-        docker run -d -p 8000:8000 --env-file .env --name reporeaper reporeaper
-        ```
+       ```bash        python -m app.main        ```       
+    
+        *(Note: Linux users can still use `gunicorn -c gunicorn_conf.py app.main:app` for production deployment)*
+    
+       **Option B: Docker Run 🐳**
+       Run in an isolated container:
+       ```bash
+       # 1. Build Image
+       docker build -t reporeaper .
+       
+       # 2. Run Container (loading env vars)
+       docker run -d -p 8000:8000 --env-file .env --name reporeaper reporeaper
+       ```
     
     5.  **Access Dashboard**
         Navigate to `http://localhost:8000`. Enter a GitHub repository URL to trigger the autonomous analysis agent.
