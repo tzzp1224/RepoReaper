@@ -11,31 +11,38 @@ jobs:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
-          lfs: true
       
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          # 注意：下面这两行请替换成你自己的用户名和 Space 名称
-          HF_USERNAME: realdexter 
+          # 请确保下面两行是你的用户名和 Space 名称
+          HF_USERNAME: realdexter   
           SPACE_NAME: RepoReaper  
         run: |
+          echo "🚀 Starting deployment to Hugging Face..."
+          
+          # 1. 配置 Git 用户
           git config --global user.email "bot@github.com"
           git config --global user.name "GitHub Actions Bot"
           
-          # === 核心修复步骤：强制使用 LFS 追踪二进制文件 ===
-          git lfs install
-          # 追踪导致报错的图片格式
-          git lfs track "docs/*.jpg"
-          git lfs track "docs/*.gif"
-          git lfs track "*.png"
+          # 2. 【关键】删除会导致报错的二进制文件文件夹
+          # Hugging Face 只需要代码运行，不需要 demo gif 图片
+          echo "🧹 Cleaning up binary files..."
+          rm -rf docs/
+          rm -f *.jpg *.png *.gif
           
-          # 确保 .gitattributes 被添加
-          git add .gitattributes
+          # 3. 【核弹步骤】删除 .git 文件夹
+          # 这会清除所有的 Git 历史记录，解决 "binary files in history" 问题
+          rm -rf .git
           
-          # 提交这个变更 (这一步会在 Action 临时环境中把普通文件转为 LFS 指针)
-          git commit -m "chore: convert binaries to LFS for Hugging Face" || true
-          # ====================================================
-
+          # 4. 重新初始化一个全新的 Git 仓库
+          git init -b main
+          git add .
+          git commit -m "deploy: auto-sync from github (clean state)"
+          
+          # 5. 强制推送到 Hugging Face
+          # 注意：这会覆盖 HF 上所有的历史记录，但在部署场景下通常是可以接受的
           git remote add space https://$HF_USERNAME:$HF_TOKEN@huggingface.co/spaces/$HF_USERNAME/$SPACE_NAME
           git push --force space main
+          
+          echo "✅ Deployment successful!"
