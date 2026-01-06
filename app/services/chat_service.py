@@ -6,9 +6,9 @@ from app.core.config import settings
 from app.utils.llm_client import client
 from app.services.vector_service import store_manager
 from app.services.github_service import get_file_content
-from app.services.chunking_service import PythonASTChunker
+from app.services.chunking_service import UniversalChunker
 
-chunker = PythonASTChunker(min_chunk_size=100)
+chunker = UniversalChunker(min_chunk_size=100)
 
 # === 新增：简单的中文检测 ===
 def is_chinese_query(text: str) -> bool:

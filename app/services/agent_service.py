@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.utils.llm_client import client
 from app.services.github_service import get_repo_structure, get_file_content
 from app.services.vector_service import store_manager
-from app.services.chunking_service import PythonASTChunker
+from app.services.chunking_service import UniversalChunker
 
 # === Helper: 鲁棒的 JSON 提取 ===
 def extract_json_from_text(text):
@@ -24,18 +24,30 @@ def extract_json_from_text(text):
         except: pass
     return []
 
-# === 优化 1：基于 AST 的 Repo Map 生成 ===
-def _extract_symbols(content):
+# === 优化: 多语言符号提取 ===
+def _extract_symbols(content, file_path):
     """
-    从代码内容中提取 Class 和 Function 的签名，生成精简地图。
+    根据文件类型，智能提取 Class 和 Function 签名生成地图。
     """
+    ext = file_path.split('.')[-1].lower() if '.' in file_path else ""
+    
+    # 1. Python 使用 AST (最准)
+    if ext == 'py':
+        return _extract_symbols_python(content)
+    
+    # 2. 其他语言使用正则 (Java, TS, JS, Go, C++)
+    elif ext in ['java', 'ts', 'tsx', 'js', 'jsx', 'go', 'cpp', 'cs', 'rs']:
+        return _extract_symbols_regex(content, ext)
+        
+    return []
+
+def _extract_symbols_python(content):
     try:
         tree = ast.parse(content)
         symbols = []
         for node in tree.body:
             if isinstance(node, ast.ClassDef):
                 symbols.append(f"  [C] {node.name}")
-                # 提取类里面的方法（可选，为了不占太多 Token，只提取 __init__ 或公共方法）
                 for sub in node.body:
                     if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         if not sub.name.startswith("_") or sub.name == "__init__":
@@ -45,48 +57,98 @@ def _extract_symbols(content):
         return symbols
     except:
         return []
+    
+def _extract_symbols_regex(content, ext):
+    """
+    针对类 C 语言的通用正则提取。
+    """
+    symbols = []
+    lines = content.split('\n')
+    
+    # 定义各语言的正则模式
+    patterns = {
+        # Java: class X, public void x()
+        'java': {
+            'class': re.compile(r'(?:public|protected|private)?\s*(?:static|abstract)?\s*(?:class|interface|enum)\s+([a-zA-Z0-9_]+)'),
+            'func': re.compile(r'(?:public|protected|private)\s+(?:static\s+)?[\w<>[\]]+\s+([a-zA-Z0-9_]+)\s*\(')
+        },
+        # JS/TS: class X, function x(), const x = () =>
+        'ts': { # 复用 logic for ts, js, tsx, jsx
+            'class': re.compile(r'class\s+([a-zA-Z0-9_]+)'),
+            'func': re.compile(r'(?:function\s+([a-zA-Z0-9_]+)|const\s+([a-zA-Z0-9_]+)\s*=\s*(?:async\s*)?\(|([a-zA-Z0-9_]+)\s*\([^)]*\)\s*[:\{])') 
+        },
+        # Go: type X struct, func X()
+        'go': {
+            'class': re.compile(r'type\s+([a-zA-Z0-9_]+)\s+(?:struct|interface)'),
+            'func': re.compile(r'func\s+(?:(?:\(.*\)\s+)?([a-zA-Z0-9_]+)|([a-zA-Z0-9_]+)\()')
+        }
+    }
+    
+    # 简单的 fallback 映射
+    lang_key = 'java' if ext in ['java', 'cs', 'cpp'] else 'go' if ext == 'go' else 'ts'
+    rules = patterns.get(lang_key, patterns['java'])
+    
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith(("//", "/*", "*")): continue
+        
+        # 匹配类
+        c_match = rules['class'].search(line)
+        if c_match:
+            # 兼容不同正则组
+            name = next((g for g in c_match.groups() if g), "Unknown")
+            symbols.append(f"  [C] {name}")
+            continue
+            
+        # 匹配方法 (仅当行尾有 { 时才认为是定义，避免匹配调用)
+        if line.endswith('{'): 
+            f_match = rules['func'].search(line)
+            if f_match:
+                name = next((g for g in f_match.groups() if g), None)
+                if name and len(name) > 2 and name not in ['if', 'for', 'switch', 'while', 'catch']:
+                    symbols.append(f"    - {name}")
+
+    return symbols[:30] # 限制每个文件提取的数量，防止 Token 爆炸
 
 async def generate_repo_map(repo_url, file_list, limit=20):
     """
-    生成增强版仓库地图：
-    1. 对 file_list 进行排序，优先看根目录和 core/app/src 目录。
-    2. 异步并发下载前 limit 个文件的内容。
-    3. 解析 AST，提取类/函数名。
-    4. 组合成 Repo Map 字符串。
+    生成增强版仓库地图 (多语言版)
     """
-    # 筛选高优先级的 Python 文件
+    # === 优化：扩展高优先级文件列表 ===
+    priority_exts = ('.py', '.java', '.go', '.js', '.ts', '.tsx', '.cpp', '.cs')
+    priority_keywords = ['main', 'app', 'core', 'api', 'service', 'utils', 'controller', 'model']
+    
     priority_files = [
         f for f in file_list 
-        if f.endswith('.py') and 
-        (f.count('/') <= 1 or any(k in f for k in ['main', 'app', 'core', 'api', 'service', 'utils']))
+        if f.endswith(priority_exts) and 
+        (f.count('/') <= 2 or any(k in f.lower() for k in priority_keywords))
     ]
-    # 截取前 N 个，避免下载太多
-    targets = priority_files[:limit]
+    
+    # 去重并截取
+    targets = sorted(list(set(priority_files)))[:limit]
     remaining = [f for f in file_list if f not in targets]
     
     repo_map_lines = []
     
-    # 异步下载并解析
     async def process_file(path):
         content = await asyncio.to_thread(get_file_content, repo_url, path)
         if not content: return f"{path} (Read Failed)"
-        symbols = await asyncio.to_thread(_extract_symbols, content)
+        
+        # === 核心变化：传入 file_path 以识别语言 ===
+        symbols = await asyncio.to_thread(_extract_symbols, content, path)
+        
         if symbols:
             return f"{path}\n" + "\n".join(symbols)
         return path
 
-    # 提示信息
     repo_map_lines.append(f"--- Key Files Structure (Top {len(targets)}) ---")
     
-    # 并发执行 (加快速度)
     tasks = [process_file(f) for f in targets]
     results = await asyncio.gather(*tasks)
     repo_map_lines.extend(results)
     
-    # 追加剩余文件（仅路径）
     if remaining:
         repo_map_lines.append("\n--- Other Files ---")
-        # 如果剩余太多，做截断
         if len(remaining) > 300:
             repo_map_lines.extend(remaining[:300])
             repo_map_lines.append(f"... ({len(remaining)-300} more files)")
@@ -106,7 +168,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
         vector_db.reset_collection() 
         # 注意：这里我们不需要手动 set repo_url，后面 save_context 会处理
         
-        chunker = PythonASTChunker(min_chunk_size=50)
+        chunker = UniversalChunker(min_chunk_size=50)
 
         file_list = await asyncio.to_thread(get_repo_structure, repo_url)
         if not file_list:
