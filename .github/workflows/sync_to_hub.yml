@@ -1,0 +1,30 @@
+name: Sync to Hugging Face hub
+on:
+  push:
+    branches: [main]  # 当推送到 main 分支时触发
+
+  # 允许在 Actions 页面手动触发
+  workflow_dispatch:
+
+jobs:
+  sync-to-hub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          lfs: true
+      
+      - name: Push to hub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}  # 读取刚才配置的密钥
+          # 下面替换成你的 HF 用户名和 Space 名称
+          HF_USERNAME: realdexter   
+          SPACE_NAME: RepoReaper  
+        run: |
+          git config --global user.email "bot@github.com"
+          git config --global user.name "GitHub Actions Bot"
+          # 添加 HF 为远程仓库
+          git remote add space https://$HF_USERNAME:$HF_TOKEN@huggingface.co/spaces/$HF_USERNAME/$SPACE_NAME
+          # 强制推送到 HF 的 main 分支
+          git push --force space main
