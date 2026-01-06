@@ -15,34 +15,44 @@ jobs:
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          # 请确保下面两行是你的用户名和 Space 名称
           HF_USERNAME: realdexter   
           SPACE_NAME: RepoReaper  
         run: |
           echo "🚀 Starting deployment to Hugging Face..."
           
-          # 1. 配置 Git 用户
+          # 1. 配置 Git
           git config --global user.email "bot@github.com"
           git config --global user.name "GitHub Actions Bot"
           
-          # 2. 【关键】删除会导致报错的二进制文件文件夹
-          # Hugging Face 只需要代码运行，不需要 demo gif 图片
-          echo "🧹 Cleaning up binary files..."
-          rm -rf docs/
-          rm -f *.jpg *.png *.gif
+          # 2. 【核心魔法】动态生成 Hugging Face 专用的 README
+          # 这一步会在发送给 HF 之前，强行在 README.md 顶部插入配置头
+          # GitHub 本地的文件不会受影响，依然保持干净漂亮
+          echo "---" > hf_header.yml
+          echo "title: RepoReaper" >> hf_header.yml
+          echo "emoji: 💀" >> hf_header.yml
+          echo "colorFrom: blue" >> hf_header.yml
+          echo "colorTo: indigo" >> hf_header.yml
+          echo "sdk: docker" >> hf_header.yml
+          echo "pinned: false" >> hf_header.yml
+          echo "app_port: 8000" >> hf_header.yml # 👈 关键：这里指定端口，你就不用改代码了
+          echo "---" >> hf_header.yml
+          echo "" >> hf_header.yml
           
-          # 3. 【核弹步骤】删除 .git 文件夹
-          # 这会清除所有的 Git 历史记录，解决 "binary files in history" 问题
+          # 将配置头和原 README 内容拼接
+          cat hf_header.yml README.md > README_temp.md
+          mv README_temp.md README.md
+          
+          # 3. 清理不需要的文件
+          rm -rf docs/
+          rm -f *.jpg *.png *.gif hf_header.yml
           rm -rf .git
           
-          # 4. 重新初始化一个全新的 Git 仓库
+          # 4. 初始化新仓库并推送
           git init -b main
           git add .
-          git commit -m "deploy: auto-sync from github (clean state)"
+          git commit -m "deploy: auto-inject hf config & sync"
           
-          # 5. 强制推送到 Hugging Face
-          # 注意：这会覆盖 HF 上所有的历史记录，但在部署场景下通常是可以接受的
           git remote add space https://$HF_USERNAME:$HF_TOKEN@huggingface.co/spaces/$HF_USERNAME/$SPACE_NAME
           git push --force space main
           
-          echo "✅ Deployment successful!"
+          echo "✅ Deployment successful! Config header injected on-the-fly."
