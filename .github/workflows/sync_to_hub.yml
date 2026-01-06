@@ -1,9 +1,7 @@
 name: Sync to Hugging Face hub
 on:
   push:
-    branches: [main]  # 当推送到 main 分支时触发
-
-  # 允许在 Actions 页面手动触发
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -17,14 +15,27 @@ jobs:
       
       - name: Push to hub
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}  # 读取刚才配置的密钥
-          # 下面替换成你的 HF 用户名和 Space 名称
-          HF_USERNAME: realdexter   
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # 注意：下面这两行请替换成你自己的用户名和 Space 名称
+          HF_USERNAME: realdexter 
           SPACE_NAME: RepoReaper  
         run: |
           git config --global user.email "bot@github.com"
           git config --global user.name "GitHub Actions Bot"
-          # 添加 HF 为远程仓库
+          
+          # === 核心修复步骤：强制使用 LFS 追踪二进制文件 ===
+          git lfs install
+          # 追踪导致报错的图片格式
+          git lfs track "docs/*.jpg"
+          git lfs track "docs/*.gif"
+          git lfs track "*.png"
+          
+          # 确保 .gitattributes 被添加
+          git add .gitattributes
+          
+          # 提交这个变更 (这一步会在 Action 临时环境中把普通文件转为 LFS 指针)
+          git commit -m "chore: convert binaries to LFS for Hugging Face" || true
+          # ====================================================
+
           git remote add space https://$HF_USERNAME:$HF_TOKEN@huggingface.co/spaces/$HF_USERNAME/$SPACE_NAME
-          # 强制推送到 HF 的 main 分支
           git push --force space main
