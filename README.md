@@ -165,12 +165,15 @@ The architecture is completely language-agnostic but optimized for dual-language
        **Option A: Local Run (Universal)**
        Compatible with Windows, macOS, and Linux. Recommended for development:        
     
-       ```bash        python -m app.main        ```       
+       ```bash
+       python -m app.main
+       ```
     
         *(Note: Linux users can still use `gunicorn -c gunicorn_conf.py app.main:app` for production deployment)*
     
        **Option B: Docker Run 🐳**
        Run in an isolated container:
+    
        ```bash
        # 1. Build Image
        docker build -t reporeaper .
