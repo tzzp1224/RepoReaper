@@ -150,23 +150,26 @@ Chat Service 实现了一套完整的推理闭环：
     SILICON_API_KEY=sk-xxxxxxxxxxxxxxx
     ```
 
-4.  **启动服务**
+4. **启动服务**
 
-    **方式 A：本地运行 (Gunicorn)**
-    适用于开发或直接部署：
-    ```bash
-    gunicorn -c gunicorn_conf.py app.main:app
-    ```
+   **方式 A：本地运行 (通用推荐)**
+   完美兼容 Windows/macOS/Linux，适用于开发调试：    
 
-    **方式 B：Docker 容器化运行 🐳**
-    无需配置本地 Python 环境，直接一键启动：
-    ```bash
-    # 1. 构建镜像
-    docker build -t reporeaper .
-    
-    # 2. 启动容器 (挂载 .env 文件)
-    docker run -d -p 8000:8000 --env-file .env --name reporeaper reporeaper
-    ```
+   ```bash
+   python -m app.main
+   ```
+
+    *(注: Linux 生产环境部署仍可使用 `gunicorn -c gunicorn_conf.py app.main:app`)*
+
+   **方式 B：Docker 容器化运行 🐳**
+   无需配置本地 Python 环境，直接一键启动：
+   ```bash
+   # 1. 构建镜像
+   docker build -t reporeaper .
+   
+   # 2. 启动容器 (挂载 .env 文件)
+   docker run -d -p 8000:8000 --env-file .env --name reporeaper reporeaper
+   ```
 
 5.  **开始审计**
     浏览器访问 `http://localhost:8000`，输入任意 GitHub 仓库地址，观察 RepoReaper 如何“收割”代码架构。
