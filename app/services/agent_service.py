@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.utils.llm_client import client
 from app.services.github_service import get_repo_structure, get_file_content
 from app.services.vector_service import store_manager
-from app.services.chunking_service import UniversalChunker
+from app.services.chunking_service import UniversalChunker, ChunkingConfig
 
 # === 硬编码配置解耦 ===
 class AgentConfig:
@@ -181,7 +181,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
         vector_db = store_manager.get_store(session_id)
         vector_db.reset_collection() 
         
-        chunker = UniversalChunker(min_chunk_size=50)
+        chunker = UniversalChunker(config=ChunkingConfig(min_chunk_size=50))
 
         file_list = await asyncio.to_thread(get_repo_structure, repo_url)
         if not file_list:
