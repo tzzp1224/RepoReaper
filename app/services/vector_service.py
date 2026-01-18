@@ -7,6 +7,7 @@ from app.core.config import settings
 from rank_bm25 import BM25Okapi
 from openai import AsyncOpenAI  
 from filelock import FileLock, Timeout
+from dataclasses import dataclass
 
 import re
 import os
@@ -24,18 +25,46 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+@dataclass
+class VectorServiceConfig:
+    # --- 基础配置 ---
+    DATA_DIR: str = "data"
+    CACHE_VERSION: str = "1.0"
+    
+    # --- 模型配置 ---
+    API_BASE_URL: str = "https://api.siliconflow.cn/v1"
+    EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
+    EMBEDDING_BATCH_SIZE: int = 50       # 批量 Embedding 的大小
+    MAX_TEXT_LENGTH: int = 8000          # 单个文档最大字符数 (防止 Token 超限)
+
+    # --- 文本处理配置 ---
+    # 支持中文的正则示例：r'[^a-zA-Z0-9_\.@\u4e00-\u9fa5]+'
+    TOKENIZE_REGEX: str = r'[^a-zA-Z0-9_\.@]+'
+
+    # --- 并发控制 ---
+    LOCK_TIMEOUT_RESET: int = 10         # 重置操作的锁等待时间 (秒)
+    LOCK_TIMEOUT_WRITE: int = 30         # 写入操作的锁等待时间 (秒)
+
+    # --- 混合检索 (RRF) 参数 ---
+    RRF_K: int = 60                      # RRF 算法中的平滑常数 k
+    RRF_WEIGHT_VECTOR: float = 1.0       # 向量检索权重
+    RRF_WEIGHT_BM25: float = 0.3         # 关键字检索权重
+    SEARCH_OVERSAMPLE_FACTOR: int = 2    # 初筛倍率 (TopK * N)
+    DEFAULT_TOP_K: int = 3               # 默认搜索数量
+
+# 实例化配置 (后续代码统一使用这个实例)
+vector_config = VectorServiceConfig()
+
 # === 初始化配置 ===
 client = AsyncOpenAI(
     api_key=settings.SILICON_API_KEY, 
-    base_url="https://api.siliconflow.cn/v1"
+    base_url=vector_config.API_BASE_URL
 )
-EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
 
-DATA_DIR = "data"
-CHROMA_DIR = os.path.join(DATA_DIR, "chroma_db")
-CONTEXT_DIR = os.path.join(DATA_DIR, "contexts")
+CHROMA_DIR = os.path.join(vector_config.DATA_DIR, "chroma_db")
+CONTEXT_DIR = os.path.join(vector_config.DATA_DIR, "contexts")
 # 全局文件锁
-LOCK_FILE = os.path.join(DATA_DIR, "vector_store.lock")
+LOCK_FILE = os.path.join(vector_config.DATA_DIR, "vector_store.lock")
 
 os.makedirs(CHROMA_DIR, exist_ok=True)
 os.makedirs(CONTEXT_DIR, exist_ok=True)
@@ -47,8 +76,6 @@ except Exception as e:
     logger.critical(f"ChromaDB Init Error: {e}", exc_info=True)
     GLOBAL_CHROMA_CLIENT = None
 
-# 缓存版本号：如果更改了数据结构，修改此版本号强制重建缓存
-CACHE_VERSION = "1.0"
 
 class VectorStore:
     def __init__(self, session_id: str):
@@ -98,7 +125,7 @@ class VectorStore:
                 with open(self.bm25_cache_file, 'rb') as f:
                     cache_data = pickle.load(f)
                     # Bug Fix: 增加版本校验
-                    if isinstance(cache_data, dict) and cache_data.get('version') == CACHE_VERSION:
+                    if isinstance(cache_data, dict) and cache_data.get('version') == vector_config.CACHE_VERSION:
                         self.bm25 = cache_data.get('bm25')
                         self.doc_store = cache_data.get('doc_store', [])
                         self.indexed_files = cache_data.get('indexed_files', set())
@@ -142,7 +169,7 @@ class VectorStore:
             fd, tmp_path = tempfile.mkstemp(dir=CONTEXT_DIR)
             with os.fdopen(fd, 'wb') as f:
                 pickle.dump({
-                    'version': CACHE_VERSION,
+                    'version': vector_config.CACHE_VERSION,
                     'bm25': self.bm25, 
                     'doc_store': self.doc_store,
                     'indexed_files': self.indexed_files
@@ -167,7 +194,7 @@ class VectorStore:
 
     def reset_collection(self):
         # 临界区：写操作必须加锁
-        lock = FileLock(LOCK_FILE, timeout=10)
+        lock = FileLock(LOCK_FILE, timeout=vector_config.LOCK_TIMEOUT_RESET)
         try:
             with lock:
                 try:
@@ -190,13 +217,16 @@ class VectorStore:
     async def embed_text(self, text):
         try:
             text = text.replace("\n", " ")
-            response = await client.embeddings.create(input=[text], model=EMBEDDING_MODEL_NAME)
+            response = await client.embeddings.create(
+                input=[text], 
+                model=vector_config.EMBEDDING_MODEL_NAME
+            )
             return response.data[0].embedding
         except Exception:
             return []
 
     def _tokenize(self, text):
-        return [t.lower() for t in re.split(r'[^a-zA-Z0-9_\.@]+', text) if t.strip()]
+        return [t.lower() for t in re.split(vector_config.TOKENIZE_REGEX, text) if t.strip()]
 
     async def add_documents(self, documents, metadatas):
         if not documents: return
@@ -206,14 +236,17 @@ class VectorStore:
         
         # 1. 批量 Embedding (不需要锁，因为只是 API 请求)
         try:
-            batch_size = 50 
+            batch_size = vector_config.EMBEDDING_BATCH_SIZE
             for i in range(0, len(documents), batch_size):
                 batch_docs = documents[i : i + batch_size]
-                batch_docs_clean = [d.replace("\n", " ")[:8000] for d in batch_docs]
+                batch_docs_clean = [
+                    d.replace("\n", " ")[:vector_config.MAX_TEXT_LENGTH] 
+                    for d in batch_docs
+                ]
                 
                 response = await client.embeddings.create(
                     input=batch_docs_clean,
-                    model=EMBEDDING_MODEL_NAME
+                    model=vector_config.EMBEDDING_MODEL_NAME
                 )
                 embeddings.extend([item.embedding for item in response.data])
         except Exception as e:
@@ -231,10 +264,10 @@ class VectorStore:
             })
 
         # 3. 临界区：写入 DB 和 Cache
-        lock = FileLock(LOCK_FILE, timeout=30)
+        lock = FileLock(LOCK_FILE, timeout=vector_config.LOCK_TIMEOUT_WRITE)
         try:
             with lock:
-                # Bug Fix: 使用局部变量，防止写入部分失败导致内存脏数据
+                # 使用局部变量，防止写入部分失败导致内存脏数据
                 # 先写 DB
                 if embeddings:
                     self.collection.add(
@@ -268,16 +301,18 @@ class VectorStore:
             })
         return sorted(formatted_docs, key=lambda x: x['metadata'].get('start_line', 0))
 
-    # === Bug Fix: 还原 Search 逻辑 ===
-    async def search_hybrid(self, query: str, top_k: int = 3) -> list:
+    # === Search 逻辑 ===
+    async def search_hybrid(self, query: str, top_k: int = vector_config.DEFAULT_TOP_K) -> list:
         vector_results = []
         query_embedding = await self.embed_text(query)
         
+        candidate_k = top_k * vector_config.SEARCH_OVERSAMPLE_FACTOR
+
         # 1. 向量搜索 (读磁盘，通常无需锁，或者 Chroma 内部有读锁)
         if query_embedding:
             try:
                 chroma_res = self.collection.query(
-                    query_embeddings=[query_embedding], n_results=top_k * 2
+                    query_embeddings=[query_embedding], n_results=candidate_k
                 )
                 if chroma_res['ids']:
                     ids = chroma_res['ids'][0]
@@ -300,7 +335,7 @@ class VectorStore:
             
             try:
                 doc_scores = self.bm25.get_scores(tokenized_query)
-                top_n = min(len(doc_scores), top_k * 2)
+                top_n = min(len(doc_scores), candidate_k)
                 # 获取前 N 个最高分的索引
                 top_indices = sorted(range(len(doc_scores)), key=lambda i: doc_scores[i], reverse=True)[:top_n]
                 
@@ -315,20 +350,20 @@ class VectorStore:
                 logger.error(f"BM25 Search Error: {e}")
 
         # 3. RRF 融合 (Reciprocal Rank Fusion)
-        k = 60
-        weight_vector = 1.0
-        weight_bm25 = 0.3
+        k = vector_config.RRF_K
         fused_scores = {}
 
         for rank, item in enumerate(vector_results):
             doc_id = item['id']
             if doc_id not in fused_scores: fused_scores[doc_id] = {"item": item, "score": 0}
-            fused_scores[doc_id]["score"] += weight_vector * (1 / (k + rank + 1))
+            # 使用配置权重
+            fused_scores[doc_id]["score"] += vector_config.RRF_WEIGHT_VECTOR * (1 / (k + rank + 1))
             
         for rank, item in enumerate(bm25_results):
             doc_id = item['id']
             if doc_id not in fused_scores: fused_scores[doc_id] = {"item": item, "score": 0}
-            fused_scores[doc_id]["score"] += weight_bm25 * (1 / (k + rank + 1))
+            # 使用配置权重
+            fused_scores[doc_id]["score"] += vector_config.RRF_WEIGHT_BM25 * (1 / (k + rank + 1))
 
         sorted_results = sorted(fused_scores.values(), key=lambda x: x['score'], reverse=True)
         return [res['item'] for res in sorted_results[:top_k]]

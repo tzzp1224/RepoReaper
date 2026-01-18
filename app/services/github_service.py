@@ -19,8 +19,6 @@ def get_repo_structure(repo_url):
     repo_name = parse_repo_url(repo_url)
     if not repo_name:
         raise ValueError("Invalid GitHub URL format") # 抛出异常
-
-    print(f"🔍 [GitHub] 连接中: {repo_name} ...")
     
     try:
         g = Github(auth=Auth.Token(settings.GITHUB_TOKEN)) if settings.GITHUB_TOKEN else Github()

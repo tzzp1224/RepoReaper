@@ -331,7 +331,7 @@
         </div>
         <div class="chat-input-bar">
             <input type="text" id="chatInput" placeholder="e.g., How does generate_unique_id work?" onkeypress="handleKeyPress(event)" disabled>
-            <button onclick="sendChat()" id="btn-chat" disabled>发送</button>
+            <button onclick="sendChat()" id="btn-chat" disabled>Send</button>
         </div>
     </div>
 </div>
@@ -628,7 +628,7 @@
     function toggleChat(enabled) {
         document.getElementById('chatInput').disabled = !enabled;
         document.getElementById('btn-chat').disabled = !enabled;
-        document.getElementById('chatInput').placeholder = enabled ? "请输入你的问题..." : "等待分析完成...";
+        document.getElementById('chatInput').placeholder = enabled ? "Please enter your question..." : "Waiting for analysis to complete...";
     }
 
 // app/index.html 底部 script 区域
