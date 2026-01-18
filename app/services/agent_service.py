@@ -19,6 +19,7 @@ class AgentConfig:
     MAX_CONTEXT_LENGTH = 15000
     LLM_TIMEOUT = 600
     FILES_PER_ROUND = 3
+    MAX_SYMBOLS_PER_FILE = 30
     # 扩展的优先级列表
     PRIORITY_EXTS = ('.py', '.java', '.go', '.js', '.ts', '.tsx', '.cpp', '.cs', '.rs')
     PRIORITY_KEYWORDS = ['main', 'app', 'core', 'api', 'service', 'utils', 'controller', 'model', 'config']
@@ -101,7 +102,7 @@ def _extract_symbols_regex(content, ext):
         line = line.strip()
         # === 正则解析优化 (过滤更多干扰项) ===
         if not line or line.startswith(("//", "/*", "*", "#", "print", "console.")): continue
-        if count > 30: break # 单文件限制
+        if count > AgentConfig.MAX_SYMBOLS_PER_FILE: break
 
         # 匹配类
         c_match = rules['class'].search(line)
