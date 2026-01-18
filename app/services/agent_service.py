@@ -5,11 +5,23 @@ import traceback
 import re
 import ast
 import httpx
+from typing import Set, Tuple, List
 from app.core.config import settings
 from app.utils.llm_client import client
 from app.services.github_service import get_repo_structure, get_file_content
 from app.services.vector_service import store_manager
 from app.services.chunking_service import UniversalChunker
+
+# === 硬编码配置解耦 ===
+class AgentConfig:
+    INITIAL_MAP_LIMIT = 15
+    MAX_ROUNDS = 3
+    MAX_CONTEXT_LENGTH = 15000
+    LLM_TIMEOUT = 600
+    FILES_PER_ROUND = 3
+    # 扩展的优先级列表
+    PRIORITY_EXTS = ('.py', '.java', '.go', '.js', '.ts', '.tsx', '.cpp', '.cs', '.rs')
+    PRIORITY_KEYWORDS = ['main', 'app', 'core', 'api', 'service', 'utils', 'controller', 'model', 'config']
 
 # === Helper: 鲁棒的 JSON 提取 ===
 def extract_json_from_text(text):
@@ -24,7 +36,7 @@ def extract_json_from_text(text):
         except: pass
     return []
 
-# === 优化: 多语言符号提取 ===
+# === 多语言符号提取 ===
 def _extract_symbols(content, file_path):
     """
     根据文件类型，智能提取 Class 和 Function 签名生成地图。
@@ -67,61 +79,62 @@ def _extract_symbols_regex(content, ext):
     
     # 定义各语言的正则模式
     patterns = {
-        # Java: class X, public void x()
         'java': {
             'class': re.compile(r'(?:public|protected|private)?\s*(?:static|abstract)?\s*(?:class|interface|enum)\s+([a-zA-Z0-9_]+)'),
             'func': re.compile(r'(?:public|protected|private)\s+(?:static\s+)?[\w<>[\]]+\s+([a-zA-Z0-9_]+)\s*\(')
         },
-        # JS/TS: class X, function x(), const x = () =>
-        'ts': { # 复用 logic for ts, js, tsx, jsx
+        'ts': { 
             'class': re.compile(r'class\s+([a-zA-Z0-9_]+)'),
             'func': re.compile(r'(?:function\s+([a-zA-Z0-9_]+)|const\s+([a-zA-Z0-9_]+)\s*=\s*(?:async\s*)?\(|([a-zA-Z0-9_]+)\s*\([^)]*\)\s*[:\{])') 
         },
-        # Go: type X struct, func X()
         'go': {
             'class': re.compile(r'type\s+([a-zA-Z0-9_]+)\s+(?:struct|interface)'),
             'func': re.compile(r'func\s+(?:(?:\(.*\)\s+)?([a-zA-Z0-9_]+)|([a-zA-Z0-9_]+)\()')
         }
     }
     
-    # 简单的 fallback 映射
-    lang_key = 'java' if ext in ['java', 'cs', 'cpp'] else 'go' if ext == 'go' else 'ts'
+    lang_key = 'java' if ext in ['java', 'cs', 'cpp', 'rs'] else 'go' if ext == 'go' else 'ts'
     rules = patterns.get(lang_key, patterns['java'])
     
+    count = 0 
     for line in lines:
         line = line.strip()
-        if not line or line.startswith(("//", "/*", "*")): continue
-        
+        # === 正则解析优化 (过滤更多干扰项) ===
+        if not line or line.startswith(("//", "/*", "*", "#", "print", "console.")): continue
+        if count > 30: break # 单文件限制
+
         # 匹配类
         c_match = rules['class'].search(line)
         if c_match:
-            # 兼容不同正则组
             name = next((g for g in c_match.groups() if g), "Unknown")
             symbols.append(f"  [C] {name}")
+            count += 1
             continue
             
-        # 匹配方法 (仅当行尾有 { 时才认为是定义，避免匹配调用)
-        if line.endswith('{'): 
+        # 匹配方法
+        if line.endswith('{') or "=>" in line: 
             f_match = rules['func'].search(line)
             if f_match:
                 name = next((g for g in f_match.groups() if g), None)
-                if name and len(name) > 2 and name not in ['if', 'for', 'switch', 'while', 'catch']:
+                # 增强过滤
+                if name and len(name) > 2 and name not in ['if', 'for', 'switch', 'while', 'catch', 'return']:
                     symbols.append(f"    - {name}")
+                    count += 1
 
-    return symbols[:30] # 限制每个文件提取的数量，防止 Token 爆炸
+    return symbols
 
-async def generate_repo_map(repo_url, file_list, limit=20):
+async def generate_repo_map(repo_url, file_list, limit=AgentConfig.INITIAL_MAP_LIMIT) -> Tuple[str, Set[str]]:
     """
     生成增强版仓库地图 (多语言版)
+    Returns:
+        str: 地图字符串
+        set: 已包含在地图中的文件路径集合 (用于增量更新查重)
     """
-    # === 优化：扩展高优先级文件列表 ===
-    priority_exts = ('.py', '.java', '.go', '.js', '.ts', '.tsx', '.cpp', '.cs')
-    priority_keywords = ['main', 'app', 'core', 'api', 'service', 'utils', 'controller', 'model']
-    
+    # === 扩展高优先级文件列表 (使用配置) ===
     priority_files = [
         f for f in file_list 
-        if f.endswith(priority_exts) and 
-        (f.count('/') <= 2 or any(k in f.lower() for k in priority_keywords))
+        if f.endswith(AgentConfig.PRIORITY_EXTS) and 
+        (f.count('/') <= 2 or any(k in f.lower() for k in AgentConfig.PRIORITY_KEYWORDS))
     ]
     
     # 去重并截取
@@ -129,12 +142,12 @@ async def generate_repo_map(repo_url, file_list, limit=20):
     remaining = [f for f in file_list if f not in targets]
     
     repo_map_lines = []
+    mapped_files_set = set(targets) # === 记录已映射的文件 ===
     
     async def process_file(path):
         content = await asyncio.to_thread(get_file_content, repo_url, path)
         if not content: return f"{path} (Read Failed)"
         
-        # === 核心变化：传入 file_path 以识别语言 ===
         symbols = await asyncio.to_thread(_extract_symbols, content, path)
         
         if symbols:
@@ -155,7 +168,7 @@ async def generate_repo_map(repo_url, file_list, limit=20):
         else:
             repo_map_lines.extend(remaining)
             
-    return "\n".join(repo_map_lines)
+    return "\n".join(repo_map_lines), mapped_files_set
 
 
 async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
@@ -166,7 +179,6 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
     try:
         vector_db = store_manager.get_store(session_id)
         vector_db.reset_collection() 
-        # 注意：这里我们不需要手动 set repo_url，后面 save_context 会处理
         
         chunker = UniversalChunker(min_chunk_size=50)
 
@@ -176,17 +188,16 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
 
         yield json.dumps({"step": "fetched", "message": f"📦 Found {len(file_list)} files. Building Repo Map (AST Parsing)..."})        
         
-        file_tree_str = await generate_repo_map(repo_url, file_list, limit=15)
+        # === 接收 mapped_files 用于后续查重 ===
+        file_tree_str, mapped_files = await generate_repo_map(repo_url, file_list, limit=AgentConfig.INITIAL_MAP_LIMIT)
         
-        MAX_ROUNDS = 3
         visited_files = set()
         context_summary = ""
         readme_file = next((f for f in file_list if f.lower().endswith("readme.md")), None)
 
-        for round_idx in range(MAX_ROUNDS):
-            yield json.dumps({"step": "thinking", "message": f"🕵️ [Round {round_idx+1}/{MAX_ROUNDS}] DeepSeek is analyzing Repo Map..."})
+        for round_idx in range(AgentConfig.MAX_ROUNDS):
+            yield json.dumps({"step": "thinking", "message": f"🕵️ [Round {round_idx+1}/{AgentConfig.MAX_ROUNDS}] DeepSeek is analyzing Repo Map..."})
             
-            # ... (DeepSeek Prompt 逻辑保持不变) ...
             system_prompt = "You are a Senior Software Architect. Your goal is to understand the codebase."
             user_content = f"""
             [Project Repo Map]
@@ -200,7 +211,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
             {context_summary}
             
             [Task]
-            Select 1-3 MOST CRITICAL files to read next to understand the core logic.
+            Select 1-{AgentConfig.FILES_PER_ROUND} MOST CRITICAL files to read next to understand the core logic.
             Focus on files that seem to contain main logic based on the Repo Map symbols.
             
             [Constraint]
@@ -218,11 +229,12 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content}
                 ],
-                temperature=0.1 
+                temperature=0.1,
+                timeout=AgentConfig.LLM_TIMEOUT 
             )
             
             raw_content = response.choices[0].message.content
-            target_files = extract_json_from_text(raw_content) # 确保 import 了这个辅助函数
+            target_files = extract_json_from_text(raw_content)
 
             valid_files = [f for f in target_files if f in file_list and f not in visited_files]
 
@@ -235,50 +247,87 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
             
             yield json.dumps({"step": "plan", "message": f"👉 [Round {round_idx+1}] Selected: {valid_files}"})
             
-            new_knowledge = ""
-            for i, file_path in enumerate(valid_files):
-                yield json.dumps({"step": "download", "message": f"📥 Reading: {file_path}..."})
-                
+            # === 并发模型缺陷优化 (并行下载处理) ===
+            async def process_single_file(file_path):
+
+                # 如果非常需要在UI显示下载进度，只能在外部模拟，或者引入Queue，但在 gather 中最简单的办法是去掉它
                 content = get_file_content(repo_url, file_path)
-                if not content: continue
-                visited_files.add(file_path)
-                
-                # Preview logic
+                if not content: return None
+
+                # 1. 摘要与 Context
                 lines = content.split('\n')[:50]
                 preview = "\n".join(lines)
-                new_knowledge += f"\n--- File: {file_path} ---\n{preview}\n"
-
-                chunks = await asyncio.to_thread(chunker.chunk_file, content, file_path)
-                if not chunks: continue
+                file_knowledge = f"\n--- File: {file_path} ---\n{preview}\n"
                 
-                documents = [c["content"] for c in chunks]
-                metadatas = []
-                for c in chunks:
-                    meta = c["metadata"]
-                    metadatas.append({
-                        "file": meta["file"],
-                        "type": meta["type"],
-                        "name": meta.get("name", ""),
-                        "class": meta.get("class") or ""
-                    })
+                # 2. Repo Map 增量更新与查重
+                new_map_entry = None
+                if file_path not in mapped_files:
+                    symbols = await asyncio.to_thread(_extract_symbols, content, file_path)
+                    if symbols:
+                        new_map_entry = f"{file_path}\n" + "\n".join(symbols)
 
-                if documents:
-                    await vector_db.add_documents(documents, metadatas)
+                # 3. 切片与入库
+                chunks = await asyncio.to_thread(chunker.chunk_file, content, file_path)
+                if chunks:
+                    documents = [c["content"] for c in chunks]
+                    metadatas = []
+                    for c in chunks:
+                        meta = c["metadata"]
+                        metadatas.append({
+                            "file": meta["file"],
+                            "type": meta["type"],
+                            "name": meta.get("name", ""),
+                            "class": meta.get("class") or ""
+                        })
+                    if documents:
+                        await vector_db.add_documents(documents, metadatas)
+
+                return {
+                    "path": file_path,
+                    "knowledge": file_knowledge,
+                    "map_entry": new_map_entry
+                }
+
+            # 提示开始并发下载
+            yield json.dumps({"step": "download", "message": f"📥 Starting parallel download for {len(valid_files)} files..."})
+
+            # 启动并发任务
+            tasks = [process_single_file(f) for f in valid_files]
+            results = await asyncio.gather(*tasks)
+
+            # 聚合结果
+            download_count = 0
+            for res in results:
+                if not res: continue
+                download_count += 1
+                visited_files.add(res["path"])
+                context_summary += res["knowledge"]
+                
+                # 增量更新 Map
+                if res["map_entry"]:
+                    file_tree_str = f"{res['map_entry']}\n\n{file_tree_str}"
+                    mapped_files.add(res["path"])
             
-            context_summary += new_knowledge
+            # === 硬编码截断解耦 ===
+            context_summary = context_summary[:AgentConfig.MAX_CONTEXT_LENGTH]
             
-            # === 核心修改：将上下文写入磁盘，供其他 Worker 读取 ===
             global_context_data = {
                 "file_tree": file_tree_str,
-                "summary": context_summary[:8000] 
+                "summary": context_summary[:8000]
             }
-            # 这是一个阻塞 IO 操作，但在 loop 中写入小 JSON 影响不大
             vector_db.save_context(repo_url, global_context_data)
             
-            yield json.dumps({"step": "indexing", "message": f"🧠 [Round {round_idx+1}] Knowledge graph updated."})
+            yield json.dumps({"step": "indexing", "message": f"🧠 [Round {round_idx+1}] Processed {download_count} files. Knowledge graph updated."})
+
         # Final Report
         yield json.dumps({"step": "generating", "message": "📝 Generating technical report..."})
         
+
+        repo_map_injection = f"""
+        [Project Repo Map (Structure)]
+        {file_tree_str}
+        """
+
         # === 根据语言选择 Prompt ===
         if language == "zh":
             # --- 中文 Prompt ---
@@ -288,6 +337,8 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
             你是一位务实的技术专家（Tech Lead）。
             
             [输入数据]
+            {repo_map_injection}  <-- 插入 Repo Map
+
             分析的文件: {list(visited_files)}
             代码知识库: 
             {context_summary[:15000]}
@@ -342,6 +393,8 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
             [Role]
             You are a **Pragmatic Tech Lead**. Your goal is to create a **"3-Pages" Architecture Overview** for a developer who wants to understand this repo in 5 minutes.
             [Input Data]
+            {repo_map_injection}  <-- Injecting Repo Map
+
             Files analyzed: {list(visited_files)}
             Code Knowledge: 
             {context_summary[:15000]}  # 稍微增加上下文长度，DeepSeek 处理得来
@@ -397,7 +450,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
 
             """
         
-        # === FIX: 增加 timeout 防止长文本生成时断连 ===
+        # === 增加 timeout 防止长文本生成时断连 ===
         stream = await client.chat.completions.create(
             model=settings.MODEL_NAME,
             messages=[
@@ -405,10 +458,10 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
                 {"role": "user", "content": analysis_user_content}
             ],
             stream=True,
-            timeout=600  # <--- 核心修复：设置 600秒 (10分钟) 超时，解决 httpx.ReadError
+            timeout=AgentConfig.LLM_TIMEOUT  # 使用 Config
         )
         
-        # === FIX: 增加 try-except 捕获流式传输中断 ===
+        # === 增加 try-except 捕获流式传输中断 ===
         try:
             async for chunk in stream:
                 if chunk.choices[0].delta.content:
@@ -420,7 +473,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
         yield json.dumps({"step": "finish", "message": "✅ Analysis Complete!"})
 
     except Exception as e:
-        # === 核心修改：全局异常捕获 ===
+        # === 全局异常捕获 ===
         import traceback
         traceback.print_exc()
         
