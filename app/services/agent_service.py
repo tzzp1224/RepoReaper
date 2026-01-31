@@ -5,12 +5,16 @@ import traceback
 import re
 import ast
 import httpx
+import time
 from typing import Set, Tuple, List
+from datetime import datetime
 from app.core.config import settings
 from app.utils.llm_client import client
 from app.services.github_service import get_repo_structure, get_file_content
 from app.services.vector_service import store_manager
 from app.services.chunking_service import UniversalChunker, ChunkingConfig
+from app.services.tracing_service import tracing_service
+from evaluation.evaluation_framework import EvaluationEngine, EvaluationResult, DataRoutingEngine
 
 # === 硬编码配置解耦 ===
 class AgentConfig:
@@ -146,7 +150,7 @@ async def generate_repo_map(repo_url, file_list, limit=AgentConfig.INITIAL_MAP_L
     mapped_files_set = set(targets) # === 记录已映射的文件 ===
     
     async def process_file(path):
-        content = await asyncio.to_thread(get_file_content, repo_url, path)
+        content = await get_file_content(repo_url, path)
         if not content: return f"{path} (Read Failed)"
         
         symbols = await asyncio.to_thread(_extract_symbols, content, path)
@@ -174,6 +178,15 @@ async def generate_repo_map(repo_url, file_list, limit=AgentConfig.INITIAL_MAP_L
 
 async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
     short_id = session_id[-6:] if session_id else "unknown"
+    
+    # === 追踪初始化 ===
+    trace_id = tracing_service.start_trace(
+        trace_name="agent_analysis",
+        session_id=session_id,
+        metadata={"repo_url": repo_url, "language": language}
+    )
+    start_time = time.time()
+    
     yield json.dumps({"step": "init", "message": f"🚀 [Session: {short_id}] Connecting to GitHub..."})
     await asyncio.sleep(0.5)
     
@@ -183,14 +196,17 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
         
         chunker = UniversalChunker(config=ChunkingConfig(min_chunk_size=50))
 
-        file_list = await asyncio.to_thread(get_repo_structure, repo_url)
+        file_list = await get_repo_structure(repo_url)
         if not file_list:
             raise Exception("Repository is empty or unreadable.")
 
         yield json.dumps({"step": "fetched", "message": f"📦 Found {len(file_list)} files. Building Repo Map (AST Parsing)..."})        
         
-        # === 接收 mapped_files 用于后续查重 ===
+        # === 接收 mapped_files 用于后续查重 + 计时 ===
+        map_start = time.time()
         file_tree_str, mapped_files = await generate_repo_map(repo_url, file_list, limit=AgentConfig.INITIAL_MAP_LIMIT)
+        map_latency_ms = (time.time() - map_start) * 1000
+        tracing_service.add_event("repo_map_generated", {"latency_ms": map_latency_ms, "files_mapped": len(mapped_files)})
         
         visited_files = set()
         context_summary = ""
@@ -224,17 +240,36 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
                  yield json.dumps({"step": "error", "message": "❌ LLM Client Not Initialized."})
                  return
             
+            # === Token & Latency Tracing ===
+            llm_start_time = time.time()
+            plan_messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ]
+            
             response = await client.chat.completions.create(
-                model=settings.MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content}
-                ],
+                model=settings.default_model_name,
+                messages=plan_messages,
                 temperature=0.1,
                 timeout=AgentConfig.LLM_TIMEOUT 
             )
             
+            llm_latency_ms = (time.time() - llm_start_time) * 1000
             raw_content = response.choices[0].message.content
+            
+            # 记录 Token 使用量
+            usage = getattr(response, 'usage', None)
+            tracing_service.record_llm_generation(
+                model=settings.default_model_name,
+                prompt_messages=plan_messages,
+                generated_text=raw_content,
+                total_latency_ms=llm_latency_ms,
+                prompt_tokens=usage.prompt_tokens if usage else None,
+                completion_tokens=usage.completion_tokens if usage else None,
+                total_tokens=usage.total_tokens if usage else None,
+                is_streaming=False,
+                metadata={"step": "file_selection", "round": round_idx + 1}
+            )
             target_files = extract_json_from_text(raw_content)
 
             valid_files = [f for f in target_files if f in file_list and f not in visited_files]
@@ -250,56 +285,78 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
             
             # === 并发模型缺陷优化 (并行下载处理) ===
             async def process_single_file(file_path):
+                try:
+                    file_start = time.time()
+                    
+                    # 🔧 异步 GitHub API (已优化为非阻塞)
+                    content = await get_file_content(repo_url, file_path)
+                    if not content: 
+                        tracing_service.add_event("file_read_failed", {"file": file_path})
+                        return None
 
-                # 如果非常需要在UI显示下载进度，只能在外部模拟，或者引入Queue，但在 gather 中最简单的办法是去掉它
-                content = get_file_content(repo_url, file_path)
-                if not content: return None
+                    # 1. 摘要与 Context
+                    lines = content.split('\n')[:50]
+                    preview = "\n".join(lines)
+                    file_knowledge = f"\n--- File: {file_path} ---\n{preview}\n"
+                    
+                    # 2. Repo Map 增量更新与查重
+                    new_map_entry = None
+                    if file_path not in mapped_files:
+                        symbols = await asyncio.to_thread(_extract_symbols, content, file_path)
+                        if symbols:
+                            new_map_entry = f"{file_path}\n" + "\n".join(symbols)
 
-                # 1. 摘要与 Context
-                lines = content.split('\n')[:50]
-                preview = "\n".join(lines)
-                file_knowledge = f"\n--- File: {file_path} ---\n{preview}\n"
-                
-                # 2. Repo Map 增量更新与查重
-                new_map_entry = None
-                if file_path not in mapped_files:
-                    symbols = await asyncio.to_thread(_extract_symbols, content, file_path)
-                    if symbols:
-                        new_map_entry = f"{file_path}\n" + "\n".join(symbols)
+                    # 3. 切片与入库
+                    chunks = await asyncio.to_thread(chunker.chunk_file, content, file_path)
+                    if chunks:
+                        documents = [c["content"] for c in chunks]
+                        metadatas = []
+                        for c in chunks:
+                            meta = c["metadata"]
+                            metadatas.append({
+                                "file": meta["file"],
+                                "type": meta["type"],
+                                "name": meta.get("name", ""),
+                                "class": meta.get("class") or ""
+                            })
+                        if documents:
+                            try:
+                                await vector_db.add_documents(documents, metadatas)
+                            except Exception as e:
+                                print(f"❌ 索引错误 {file_path}: {e}")
+                                # 不中断，继续处理其他文件
+                                return None
+                    
+                    file_latency_ms = (time.time() - file_start) * 1000
+                    tracing_service.add_event("file_processed", {
+                        "file": file_path,
+                        "latency_ms": file_latency_ms,
+                        "chunks_count": len(chunks) if chunks else 0
+                    })
 
-                # 3. 切片与入库
-                chunks = await asyncio.to_thread(chunker.chunk_file, content, file_path)
-                if chunks:
-                    documents = [c["content"] for c in chunks]
-                    metadatas = []
-                    for c in chunks:
-                        meta = c["metadata"]
-                        metadatas.append({
-                            "file": meta["file"],
-                            "type": meta["type"],
-                            "name": meta.get("name", ""),
-                            "class": meta.get("class") or ""
-                        })
-                    if documents:
-                        await vector_db.add_documents(documents, metadatas)
-
-                return {
-                    "path": file_path,
-                    "knowledge": file_knowledge,
-                    "map_entry": new_map_entry
-                }
+                    return {
+                        "path": file_path,
+                        "knowledge": file_knowledge,
+                        "map_entry": new_map_entry
+                    }
+                except Exception as e:
+                    print(f"❌ 处理文件错误 {file_path}: {e}")
+                    return None
 
             # 提示开始并发下载
             yield json.dumps({"step": "download", "message": f"📥 Starting parallel download for {len(valid_files)} files..."})
 
-            # 启动并发任务
+            # 启动并发任务 (return_exceptions=True 防止单个失败导致整个中断)
             tasks = [process_single_file(f) for f in valid_files]
-            results = await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
             # 聚合结果
             download_count = 0
             for res in results:
-                if not res: continue
+                if not res or isinstance(res, Exception): 
+                    if isinstance(res, Exception):
+                        print(f"❌ Task 异常: {res}")
+                    continue
                 download_count += 1
                 visited_files.add(res["path"])
                 context_summary += res["knowledge"]
@@ -452,24 +509,60 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
             """
         
         # === 增加 timeout 防止长文本生成时断连 ===
+        report_messages = [
+            {"role": "system", "content": "You are a pragmatic Tech Lead. Focus on architecture and data flow, not implementation details."},
+            {"role": "user", "content": analysis_user_content}
+        ]
+        
+        stream_start_time = time.time()
         stream = await client.chat.completions.create(
-            model=settings.MODEL_NAME,
-            messages=[
-                {"role": "system", "content": "You are a pragmatic Tech Lead. Focus on architecture and data flow, not implementation details."},
-                {"role": "user", "content": analysis_user_content}
-            ],
+            model=settings.default_model_name,
+            messages=report_messages,
             stream=True,
             timeout=AgentConfig.LLM_TIMEOUT  # 使用 Config
         )
+        
+        # === TTFT & Token Tracking ===
+        first_token_received = False
+        ttft_ms = None
+        generated_text = ""
+        completion_tokens_estimate = 0
         
         # === 增加 try-except 捕获流式传输中断 ===
         try:
             async for chunk in stream:
                 if chunk.choices[0].delta.content:
-                    yield json.dumps({"step": "report_chunk", "chunk": chunk.choices[0].delta.content})
+                    content = chunk.choices[0].delta.content
+                    
+                    # 记录 TTFT (首 Token 时间)
+                    if not first_token_received:
+                        ttft_ms = (time.time() - stream_start_time) * 1000
+                        tracing_service.record_ttft(
+                            ttft_ms=ttft_ms,
+                            model=settings.default_model_name,
+                            metadata={"step": "report_generation"}
+                        )
+                        first_token_received = True
+                    
+                    generated_text += content
+                    completion_tokens_estimate += 1  # 粗略估计每个 chunk 约 1 token
+                    yield json.dumps({"step": "report_chunk", "chunk": content})
         except (httpx.ReadError, httpx.ConnectError) as e:
             yield json.dumps({"step": "error", "message": f"⚠️ Network Timeout during generation: {str(e)}"})
             return
+        
+        # 流结束后记录完整的 LLM 生成信息
+        total_latency_ms = (time.time() - stream_start_time) * 1000
+        tracing_service.record_llm_generation(
+            model=settings.default_model_name,
+            prompt_messages=report_messages,
+            generated_text=generated_text,
+            ttft_ms=ttft_ms,
+            total_latency_ms=total_latency_ms,
+            completion_tokens=completion_tokens_estimate,
+            is_streaming=True,
+            metadata={"step": "report_generation", "generated_chars": len(generated_text)}
+        )
 
         yield json.dumps({"step": "finish", "message": "✅ Analysis Complete!"})
 

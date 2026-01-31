@@ -1,93 +1,210 @@
-# 文件路径: app/services/github_service.py
-from github import Github, Auth, GithubException
-from app.core.config import settings
-import os
+# -*- coding: utf-8 -*-
+"""
+GitHub 服务层
 
-def parse_repo_url(url):
-    """解析 GitHub URL 提取 owner/repo"""
-    if url.endswith(".git"):
-        url = url[:-4]
-    parts = url.split("/")
-    if "github.com" in parts:
-        index = parts.index("github.com")
-        if len(parts) > index + 2:
-            return f"{parts[index+1]}/{parts[index+2]}"
+职责:
+- 提供业务级别的 GitHub 操作
+- 封装底层客户端，提供简洁 API
+- 保持向后兼容的函数签名
+"""
+
+import logging
+from typing import List, Optional, Dict
+
+from app.utils.github_client import (
+    GitHubClient,
+    GitHubRepo,
+    GitHubFile,
+    FileFilter,
+    GitHubError,
+    GitHubNotFoundError,
+    get_github_client,
+    parse_repo_url,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# 服务类
+# ============================================================
+
+class GitHubService:
+    """
+    GitHub 服务
+    
+    提供高层业务操作，内部使用异步客户端。
+    
+    使用示例:
+    ```python
+    service = GitHubService()
+    
+    # 获取仓库文件列表
+    files = await service.get_repo_structure("https://github.com/owner/repo")
+    
+    # 获取文件内容
+    content = await service.get_file_content(
+        "https://github.com/owner/repo",
+        "src/main.py"
+    )
+    
+    # 批量获取文件
+    contents = await service.get_files_content(
+        "https://github.com/owner/repo",
+        ["README.md", "src/main.py", "requirements.txt"]
+    )
+    ```
+    """
+    
+    def __init__(self, client: Optional[GitHubClient] = None):
+        self._client = client
+    
+    @property
+    def client(self) -> GitHubClient:
+        """获取客户端 (延迟初始化)"""
+        if self._client is None:
+            self._client = get_github_client()
+        return self._client
+    
+    async def _get_repo_from_url(self, repo_url: str) -> GitHubRepo:
+        """从 URL 获取仓库对象"""
+        parsed = parse_repo_url(repo_url)
+        if not parsed:
+            raise ValueError(f"无效的 GitHub URL: {repo_url}")
+        
+        owner, name = parsed
+        return await self.client.get_repo(owner, name)
+    
+    async def get_repo_structure(
+        self,
+        repo_url: str,
+        file_filter: Optional[FileFilter] = None
+    ) -> List[str]:
+        """
+        获取仓库文件列表
+        
+        Args:
+            repo_url: GitHub 仓库 URL
+            file_filter: 自定义文件过滤器
+            
+        Returns:
+            文件路径列表
+        """
+        repo = await self._get_repo_from_url(repo_url)
+        files = await self.client.get_repo_tree(repo, file_filter)
+        return [f.path for f in files]
+    
+    async def get_file_content(
+        self,
+        repo_url: str,
+        file_path: str
+    ) -> Optional[str]:
+        """
+        获取单个文件内容
+        
+        Args:
+            repo_url: GitHub 仓库 URL
+            file_path: 文件路径
+            
+        Returns:
+            文件内容，失败返回 None
+        """
+        repo = await self._get_repo_from_url(repo_url)
+        return await self.client.get_file_content(repo, file_path)
+    
+    async def get_files_content(
+        self,
+        repo_url: str,
+        file_paths: List[str]
+    ) -> Dict[str, Optional[str]]:
+        """
+        批量获取文件内容 (并发)
+        
+        Args:
+            repo_url: GitHub 仓库 URL
+            file_paths: 文件路径列表
+            
+        Returns:
+            {path: content} 字典
+        """
+        repo = await self._get_repo_from_url(repo_url)
+        return await self.client.get_files_content(repo, file_paths, show_progress=True)
+    
+    async def get_repo_info(self, repo_url: str) -> GitHubRepo:
+        """
+        获取仓库基本信息
+        
+        Args:
+            repo_url: GitHub 仓库 URL
+            
+        Returns:
+            GitHubRepo 对象
+        """
+        return await self._get_repo_from_url(repo_url)
+
+
+# ============================================================
+# 全局服务实例
+# ============================================================
+
+_github_service: Optional[GitHubService] = None
+
+
+def get_github_service() -> GitHubService:
+    """获取 GitHub 服务单例"""
+    global _github_service
+    if _github_service is None:
+        _github_service = GitHubService()
+    return _github_service
+
+
+# ============================================================
+# 兼容旧接口 (同步风格的函数签名，但返回协程)
+# ============================================================
+
+# 保留 parse_repo_url 的旧签名兼容
+def parse_repo_url_compat(url: str) -> Optional[str]:
+    """
+    解析 GitHub URL (兼容旧接口)
+    
+    Returns:
+        "owner/repo" 字符串，无效返回 None
+    """
+    result = parse_repo_url(url)
+    if result:
+        return f"{result[0]}/{result[1]}"
     return None
 
-def get_repo_structure(repo_url):
-    """获取仓库文件树，包含过滤逻辑"""
-    repo_name = parse_repo_url(repo_url)
-    if not repo_name:
-        raise ValueError("Invalid GitHub URL format") # 抛出异常
-    
-    try:
-        g = Github(auth=Auth.Token(settings.GITHUB_TOKEN)) if settings.GITHUB_TOKEN else Github()
-        repo = g.get_repo(repo_name)
-        default_branch = repo.default_branch
-        contents = repo.get_git_tree(default_branch, recursive=True).tree
-        
-        file_list = []
-        
-        # ... (过滤器配置 IGNORED_EXTS, IGNORED_DIRS 保持不变) ...
-        IGNORED_EXTS = {
-            '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.mp4',
-            '.pyc', '.lock', '.zip', '.tar', '.gz', '.pdf',
-            '.DS_Store', '.gitignore', '.gitattributes'
-        }
-        IGNORED_DIRS = {
-            '.git', '.github', '.vscode', '.idea', '__pycache__', 
-            'node_modules', 'venv', 'env', 'build', 'dist', 'site-packages',
-            'migrations'
-        }
 
-        for content in contents:
-            path = content.path
-            if content.type != "blob": continue
-            if any(part in IGNORED_DIRS for part in path.split("/")): continue
-            ext = os.path.splitext(path)[1]
-            if ext in IGNORED_EXTS: continue
-            file_list.append(path)
-
-        return file_list
-
-    except GithubException as e:
-        # === 核心修改：不再吞掉异常，而是根据状态码抛出更友好的错误 ===
-        if e.status == 401:
-            raise Exception("GitHub Token 无效或过期 (401 Unauthorized)。请检查 .env 配置。")
-        elif e.status == 403:
-            raise Exception("GitHub API 请求受限 (403 Rate Limit)。建议添加 Token。")
-        elif e.status == 404:
-            raise Exception(f"找不到仓库 {repo_name} (404 Not Found)。请检查 URL 或私有权限。")
-        else:
-            raise Exception(f"GitHub API Error: {e.data.get('message', str(e))}")
-    except Exception as e:
-        raise e
-
-def get_file_content(repo_url, file_path):
+async def get_repo_structure(repo_url: str) -> List[str]:
     """
-    下载单个文件内容。
-    ✨ 修复：增加对文件夹(Directory)的处理逻辑。
-    """
-    repo_name = parse_repo_url(repo_url)
-    if not repo_name: return None
+    获取仓库文件列表 (兼容旧接口)
     
-    try:
-        g = Github(auth=Auth.Token(settings.GITHUB_TOKEN)) if settings.GITHUB_TOKEN else Github()
-        repo = g.get_repo(repo_name)
-        
-        # PyGithub get_contents 可能返回 ContentFile 或 List[ContentFile]
-        content = repo.get_contents(file_path, ref=repo.default_branch)
-        
-        # 情况 A: 这是一个文件夹 (返回列表)
-        if isinstance(content, list):
-            file_names = [f.name for f in content]
-            # 返回文件夹清单，让 LLM 知道里面有什么，从而决定下一步读哪个具体文件
-            return f"Directory '{file_path}' contains:\n" + "\n".join([f"- {name}" for name in file_names])
-            
-        # 情况 B: 这是一个文件
-        return content.decoded_content.decode('utf-8')
-        
-    except Exception as e:
-        # 如果是因为路径不存在等原因，打印错误
-        print(f"❌ [GitHub Error] 读取路径 {file_path} 失败: {e}")
-        return None
+    注意: 这是一个异步函数，需要 await 调用
+    """
+    service = get_github_service()
+    return await service.get_repo_structure(repo_url)
+
+
+async def get_file_content(repo_url: str, file_path: str) -> Optional[str]:
+    """
+    获取文件内容 (兼容旧接口)
+    
+    注意: 这是一个异步函数，需要 await 调用
+    """
+    service = get_github_service()
+    return await service.get_file_content(repo_url, file_path)
+
+
+# 导出
+__all__ = [
+    "GitHubService",
+    "get_github_service",
+    "get_repo_structure",
+    "get_file_content",
+    "parse_repo_url_compat",
+    "GitHubError",
+    "GitHubNotFoundError",
+    "FileFilter",
+    "GitHubRepo",
+]

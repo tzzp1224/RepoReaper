@@ -2,12 +2,39 @@
 import json
 import asyncio
 import re
+import time
+from dataclasses import dataclass
+from typing import Dict, Optional, AsyncGenerator
 from app.core.config import settings
 from app.utils.llm_client import client
 from app.services.vector_service import store_manager
 from app.services.github_service import get_file_content
-# [Fix 1] 导入 ChunkingConfig
 from app.services.chunking_service import UniversalChunker, ChunkingConfig
+from app.services.tracing_service import tracing_service
+
+
+@dataclass
+class ChatResult:
+    """聊天结果 - 用于后续自动评估"""
+    answer: str                    # 最终回答
+    retrieved_context: str        # 检索到的上下文
+    generation_latency_ms: float  # 生成耗时
+    retrieval_latency_ms: float = 0  # 检索耗时
+
+
+# === 评估数据存储 (供 main.py 获取) ===
+# 存储每个 session 的评估数据，key 为 session_id
+_eval_data_store: Dict[str, ChatResult] = {}
+
+def get_eval_data(session_id: str) -> Optional[ChatResult]:
+    """获取指定 session 的评估数据"""
+    return _eval_data_store.get(session_id)
+
+def clear_eval_data(session_id: str) -> None:
+    """清除指定 session 的评估数据"""
+    if session_id in _eval_data_store:
+        del _eval_data_store[session_id]
+
 
 # [Fix 2] 使用 Config 对象初始化，而非直接传参
 # 之前的写法: chunker = UniversalChunker(min_chunk_size=100)
@@ -42,7 +69,7 @@ async def _rewrite_query(user_query: str):
     """
     try:
         response = await client.chat.completions.create(
-            model=settings.MODEL_NAME,
+            model=settings.default_model_name,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
             max_tokens=100
@@ -60,6 +87,12 @@ async def _rewrite_query(user_query: str):
 
 async def process_chat_stream(user_query: str, session_id: str):
     vector_db = store_manager.get_store(session_id)
+    
+    # === 评估数据收集变量 ===
+    collected_context = ""  # 收集检索到的上下文
+    collected_response = ""  # 收集完整响应
+    collected_retrieval_latency = 0.0
+    collected_generation_latency = 0.0
     
     # === 1. 语言环境检测 ===
     use_chinese = is_chinese_query(user_query)
@@ -79,10 +112,18 @@ async def process_chat_stream(user_query: str, session_id: str):
     # 可以在这里 yield 一个 debug 信息给前端，如果不想要可以注释掉
     yield f"{ui_msgs['thinking']}`{search_query}`...\n\n"
     
-    # 1. 检索 RAG (使用重写后的 Query)
-    # 使用 asyncio.to_thread 避免阻塞主线程
+    # === 1. 检索 RAG (使用重写后的 Query) 并计时 ===
+    retrieval_start = time.time()
     relevant_docs = await vector_db.search_hybrid(search_query, top_k=6)
+    retrieval_latency_ms = (time.time() - retrieval_start) * 1000
+    collected_retrieval_latency = retrieval_latency_ms  # 保存检索耗时
+    tracing_service.add_event("retrieval_completed", {
+        "latency_ms": retrieval_latency_ms,
+        "documents_retrieved": len(relevant_docs) if relevant_docs else 0
+    })
+    
     rag_context = _build_context(relevant_docs)
+    collected_context = rag_context  # 保存检索上下文
     
     # 2. 获取全局上下文
     global_context = vector_db.global_context or {}
@@ -130,8 +171,9 @@ async def process_chat_stream(user_query: str, session_id: str):
 
     try:
         # === Phase 1: 思考与回答 ===
+        generation_start = time.time()
         stream = await client.chat.completions.create(
-            model=settings.MODEL_NAME,
+            model=settings.default_model_name,
             messages=messages,
             stream=True,
             temperature=0.1, 
@@ -148,6 +190,7 @@ async def process_chat_stream(user_query: str, session_id: str):
             
             buffer += content
             full_response += content
+            collected_response += content  # 收集完整响应
             
             # 检测标签
             if "</tool_code>" in buffer:
@@ -201,7 +244,7 @@ async def process_chat_stream(user_query: str, session_id: str):
                 ]
                 
                 stream_final = await client.chat.completions.create(
-                    model=settings.MODEL_NAME,
+                    model=settings.default_model_name,
                     messages=final_messages,
                     stream=True,
                     temperature=0.2
@@ -210,12 +253,34 @@ async def process_chat_stream(user_query: str, session_id: str):
                 async for chunk in stream_final:
                     content = chunk.choices[0].delta.content or ""
                     if content:
+                        collected_response += content  # 收集最终回答
                         yield content
+        
+        generation_latency_ms = (time.time() - generation_start) * 1000
+        collected_generation_latency = generation_latency_ms
+        tracing_service.add_event("generation_completed", {
+            "latency_ms": generation_latency_ms,
+            "token_count": len(full_response.split())
+        })
+        
+        # === 存储评估数据供 main.py 获取 ===
+        _eval_data_store[session_id] = ChatResult(
+            answer=collected_response,
+            retrieved_context=collected_context,
+            generation_latency_ms=collected_generation_latency,
+            retrieval_latency_ms=collected_retrieval_latency
+        )
+        print(f"📦 [EvalData] Stored for session {session_id}: context={len(collected_context)} chars, answer={len(collected_response)} chars")
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        yield f"❌ System Error: {str(e)}"
+        error_msg = str(e)
+        tracing_service.add_event("generation_error", {
+            "error": error_msg,
+            "error_type": type(e).__name__
+        })
+        yield f"❌ System Error: {error_msg}"
 
 # 辅助函数保持不变
 def _build_context(docs):
@@ -231,7 +296,7 @@ def _build_context(docs):
 
 async def _download_and_index(vector_db, file_path):
     try:
-        content = get_file_content(vector_db.repo_url, file_path)
+        content = await get_file_content(vector_db.repo_url, file_path)
         if not content: return False
         
         chunks = await asyncio.to_thread(chunker.chunk_file, content, file_path)

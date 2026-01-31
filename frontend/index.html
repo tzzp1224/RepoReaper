@@ -554,11 +554,14 @@
             msgId = addMsg("ai", "...");
         }, 10);
         
+        // 获取当前仓库 URL（用于评估）
+        const repoUrl = document.getElementById('repoUrl').value.trim();
+        
         try {
             const res = await fetch(`${API_BASE}/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ query: query, session_id: SESSION_ID })
+                body: JSON.stringify({ query: query, session_id: SESSION_ID, repo_url: repoUrl })
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             

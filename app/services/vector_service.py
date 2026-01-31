@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 # 文件路径: app/services/vector_service.py
 
+import asyncio
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 from app.core.config import settings
+from app.utils.embedding import get_embedding_service, EmbeddingConfig
 from rank_bm25 import BM25Okapi
-from openai import AsyncOpenAI  
 from filelock import FileLock, Timeout
 from dataclasses import dataclass
 
@@ -55,11 +56,15 @@ class VectorServiceConfig:
 # 实例化配置 (后续代码统一使用这个实例)
 vector_config = VectorServiceConfig()
 
-# === 初始化配置 ===
-client = AsyncOpenAI(
-    api_key=settings.SILICON_API_KEY, 
-    base_url=vector_config.API_BASE_URL
+# === 初始化 Embedding 服务 (并发优化版) ===
+embedding_config = EmbeddingConfig(
+    api_base_url=vector_config.API_BASE_URL,
+    model_name=vector_config.EMBEDDING_MODEL_NAME,
+    batch_size=vector_config.EMBEDDING_BATCH_SIZE,
+    max_text_length=vector_config.MAX_TEXT_LENGTH,
+    max_concurrent_batches=5  # 最大 5 个并发批次
 )
+embedding_service = get_embedding_service(embedding_config)
 
 CHROMA_DIR = os.path.join(vector_config.DATA_DIR, "chroma_db")
 CONTEXT_DIR = os.path.join(vector_config.DATA_DIR, "contexts")
@@ -215,15 +220,8 @@ class VectorStore:
             raise
 
     async def embed_text(self, text):
-        try:
-            text = text.replace("\n", " ")
-            response = await client.embeddings.create(
-                input=[text], 
-                model=vector_config.EMBEDDING_MODEL_NAME
-            )
-            return response.data[0].embedding
-        except Exception:
-            return []
+        """获取单个文本的 Embedding (使用优化后的服务)"""
+        return await embedding_service.embed_text(text)
 
     def _tokenize(self, text):
         return [t.lower() for t in re.split(vector_config.TOKENIZE_REGEX, text) if t.strip()]
@@ -231,26 +229,16 @@ class VectorStore:
     async def add_documents(self, documents, metadatas):
         if not documents: return
         
-        embeddings = []
         ids = []
         
-        # 1. 批量 Embedding (不需要锁，因为只是 API 请求)
-        try:
-            batch_size = vector_config.EMBEDDING_BATCH_SIZE
-            for i in range(0, len(documents), batch_size):
-                batch_docs = documents[i : i + batch_size]
-                batch_docs_clean = [
-                    d.replace("\n", " ")[:vector_config.MAX_TEXT_LENGTH] 
-                    for d in batch_docs
-                ]
-                
-                response = await client.embeddings.create(
-                    input=batch_docs_clean,
-                    model=vector_config.EMBEDDING_MODEL_NAME
-                )
-                embeddings.extend([item.embedding for item in response.data])
-        except Exception as e:
-            logger.error(f"Embedding API Error: {e}")
+        # 1. 批量 Embedding (并发优化版 - 自动分批、并发、重试)
+        logger.info(f"📊 开始 Embedding: {len(documents)} 个文档")
+        embeddings = await embedding_service.embed_batch(documents, show_progress=True)
+        
+        # 检查是否有有效的 embeddings
+        valid_embeddings = [e for e in embeddings if e]
+        if not valid_embeddings:
+            logger.error("Embedding 全部失败，跳过文档添加")
             return
 
         # 2. 准备数据
@@ -263,33 +251,36 @@ class VectorStore:
                 "id": doc_id, "content": doc, "metadata": metadatas[i]
             })
 
-        # 3. 临界区：写入 DB 和 Cache
-        lock = FileLock(LOCK_FILE, timeout=vector_config.LOCK_TIMEOUT_WRITE)
-        try:
-            with lock:
-                # 使用局部变量，防止写入部分失败导致内存脏数据
-                # 先写 DB
-                if embeddings:
-                    self.collection.add(
-                        documents=documents, embeddings=embeddings, 
-                        metadatas=metadatas, ids=ids
-                    )
-                
-                # 再更新内存
-                self.doc_store.extend(new_doc_entries)
-                tokenized_corpus = [self._tokenize(d['content']) for d in self.doc_store]
-                self.bm25 = BM25Okapi(tokenized_corpus)
-                
-                # 最后写缓存
-                self._save_bm25_cache()
-                
-        except Timeout:
-            logger.error("Add Docs Lock Timeout")
-            raise Exception("System busy, please try again.")
-        except Exception as e:
-            logger.critical(f"Critical Write Error: {e}")
-            # 这里可以考虑是否重新 reload _load_local_state 以恢复一致性
-            raise
+        # 3. 临界区：在线程中执行写入，避免阻塞事件循环
+        def _write_to_db():
+            lock = FileLock(LOCK_FILE, timeout=vector_config.LOCK_TIMEOUT_WRITE)
+            try:
+                with lock:
+                    # 使用局部变量，防止写入部分失败导致内存脏数据
+                    # 先写 DB
+                    if embeddings:
+                        self.collection.add(
+                            documents=documents, embeddings=embeddings, 
+                            metadatas=metadatas, ids=ids
+                        )
+                    
+                    # 再更新内存
+                    self.doc_store.extend(new_doc_entries)
+                    tokenized_corpus = [self._tokenize(d['content']) for d in self.doc_store]
+                    self.bm25 = BM25Okapi(tokenized_corpus)
+                    
+                    # 最后写缓存
+                    self._save_bm25_cache()
+                    
+            except Timeout:
+                logger.error("Add Docs Lock Timeout")
+                raise Exception("System busy, please try again.")
+            except Exception as e:
+                logger.critical(f"Critical Write Error: {e}")
+                raise
+        
+        # 🔧 使用 asyncio.to_thread 避免阻塞事件循环
+        await asyncio.to_thread(_write_to_db)
 
     def get_documents_by_file(self, file_path):
         raw_docs = [doc for doc in self.doc_store if doc['metadata']['file'] == file_path]
