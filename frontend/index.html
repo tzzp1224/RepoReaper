@@ -85,6 +85,14 @@
         }
         button:hover { background: #1d4ed8; }
         button:disabled { background: #93c5fd; cursor: not-allowed; }
+        
+        /* === 中止按钮样式 === */
+        button.btn-stop {
+            background: #dc2626;
+        }
+        button.btn-stop:hover {
+            background: #b91c1c;
+        }
 
         /* === [新增] 美观的语言切换开关样式 === */
         .lang-toggle {
@@ -331,7 +339,7 @@
         </div>
         <div class="chat-input-bar">
             <input type="text" id="chatInput" placeholder="e.g., How does generate_unique_id work?" onkeypress="handleKeyPress(event)" disabled>
-            <button onclick="sendChat()" id="btn-chat" disabled>Send</button>
+            <button onclick="handleChatButton()" id="btn-chat" disabled>Send</button>
         </div>
     </div>
 </div>
@@ -537,6 +545,44 @@
         };
     }
 
+    // === 聊天中止控制 ===
+    let chatAbortController = null;
+    let isChatGenerating = false;
+
+    function handleChatButton() {
+        if (isChatGenerating) {
+            stopChat();
+        } else {
+            sendChat();
+        }
+    }
+
+    function stopChat() {
+        if (chatAbortController) {
+            chatAbortController.abort();
+            chatAbortController = null;
+        }
+    }
+
+    function setChatButtonState(isGenerating) {
+        const btnChat = document.getElementById('btn-chat');
+        const input = document.getElementById('chatInput');
+        isChatGenerating = isGenerating;
+        
+        if (isGenerating) {
+            btnChat.textContent = "Stop";
+            btnChat.classList.add('btn-stop');
+            btnChat.disabled = false;
+            input.disabled = true;
+        } else {
+            btnChat.textContent = "Send";
+            btnChat.classList.remove('btn-stop');
+            btnChat.disabled = false;
+            input.disabled = false;
+            input.focus();
+        }
+    }
+
     async function sendChat() {
         const input = document.getElementById('chatInput');
         const query = input.value.trim();
@@ -545,9 +591,9 @@
         addMsg("user", query);
         input.value = "";
         
-        const btnChat = document.getElementById('btn-chat');
-        input.disabled = true;
-        btnChat.disabled = true;
+        // 创建中止控制器
+        chatAbortController = new AbortController();
+        setChatButtonState(true);
         
         let msgId;
         setTimeout(() => {
@@ -561,7 +607,8 @@
             const res = await fetch(`${API_BASE}/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ query: query, session_id: SESSION_ID, repo_url: repoUrl })
+                body: JSON.stringify({ query: query, session_id: SESSION_ID, repo_url: repoUrl }),
+                signal: chatAbortController.signal
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             
@@ -585,13 +632,22 @@
             await renderMermaidDiagrams(msgDiv);
 
         } catch (err) {
-            if (!msgId) msgId = addMsg("ai", "");
-            const div = document.getElementById(msgId);
-            if(div) div.innerHTML += `<br><span style="color:red">❌ Error: ${err.message}</span>`;
+            if (err.name === 'AbortError') {
+                // 用户主动中止，添加提示
+                const div = document.getElementById(msgId);
+                if (div && div.innerHTML !== '...') {
+                    div.innerHTML += '<br><span style="color:#6b7280; font-style:italic">⏹️ Stop</span>';
+                } else if (div) {
+                    div.innerHTML = '<span style="color:#6b7280; font-style:italic">⏹️ Stop</span>';
+                }
+            } else {
+                if (!msgId) msgId = addMsg("ai", "");
+                const div = document.getElementById(msgId);
+                if(div) div.innerHTML += `<br><span style="color:red">❌ Error: ${err.message}</span>`;
+            }
         } finally {
-            input.disabled = false;
-            btnChat.disabled = false;
-            input.focus();
+            chatAbortController = null;
+            setChatButtonState(false);
         }
     }
 
@@ -649,7 +705,9 @@
         }
     }
 
-    function handleKeyPress(e) { if (e.key === 'Enter') sendChat(); }
+    function handleKeyPress(e) { 
+        if (e.key === 'Enter' && !isChatGenerating) sendChat(); 
+    }
 </script>
 
 </body>
