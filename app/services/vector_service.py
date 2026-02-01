@@ -225,55 +225,48 @@ class VectorStore:
             if t.strip()
         ]
     
-    def save_context(self, repo_url: str, context_data: Dict[str, Any]) -> None:
-        """保存仓库上下文"""
+    async def save_context(self, repo_url: str, context_data: Dict[str, Any]) -> None:
+        """保存仓库上下文 (异步，不阻塞事件循环)"""
         self.repo_url = repo_url
         self.global_context = context_data
-        
+        await asyncio.to_thread(self._write_context_file, {
+            "repo_url": repo_url,
+            "global_context": context_data,
+        })
+    
+    def _write_context_file(self, updates: Dict[str, Any]) -> None:
+        """写入上下文文件 (同步，供线程池调用)"""
         try:
-            # 读取现有数据以保留 report
             existing = {}
             if os.path.exists(self._context_file):
                 with open(self._context_file, 'r', encoding='utf-8') as f:
                     existing = json.load(f)
-            
-            # 合并数据
-            existing.update({
-                "repo_url": repo_url,
-                "global_context": context_data,
-            })
-            
+            existing.update(updates)
             with open(self._context_file, 'w', encoding='utf-8') as f:
                 json.dump(existing, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            logger.error(f"保存上下文失败: {e}")
+            logger.error(f"写入上下文失败: {e}")
     
-    def save_report(self, report: str, language: str = "en") -> None:
-        """
-        保存技术报告（按语言存储）
-        
-        Args:
-            report: 报告内容
-            language: 语言代码 ('en', 'zh')
-        """
+    async def save_report(self, report: str, language: str = "en") -> None:
+        """保存技术报告 (异步，不阻塞事件循环)"""
+        await asyncio.to_thread(self._write_report, report, language)
+    
+    def _write_report(self, report: str, language: str) -> None:
+        """写入报告 (同步，供线程池调用)"""
         try:
             existing = {}
             if os.path.exists(self._context_file):
                 with open(self._context_file, 'r', encoding='utf-8') as f:
                     existing = json.load(f)
             
-            # 按语言存储报告
             if "reports" not in existing:
                 existing["reports"] = {}
             existing["reports"][language] = report
-            
-            # 兼容旧字段（保留最新的报告）
             existing["report"] = report
             existing["report_language"] = language
             
             with open(self._context_file, 'w', encoding='utf-8') as f:
                 json.dump(existing, f, ensure_ascii=False, indent=2)
-            
             logger.info(f"📝 报告已保存: {self.session_id} ({language})")
         except Exception as e:
             logger.error(f"保存报告失败: {e}")
@@ -417,17 +410,19 @@ class VectorStore:
         # 3. 写入 Qdrant
         added = await self._qdrant.add_documents(docs, valid_embeddings)
         
-        # 4. 更新 BM25 索引
+        # 4. 更新 BM25 索引 (放入线程池，避免阻塞)
         self._doc_store.extend(docs)
         self._indexed_files.update(doc.file_path for doc in docs)
         
-        tokenized = [self._tokenize(doc.content) for doc in self._doc_store]
-        self._bm25 = BM25Okapi(tokenized)
-        
-        # 5. 保存缓存
-        self._save_bm25_cache()
+        await asyncio.to_thread(self._rebuild_bm25_sync)
         
         return added
+    
+    def _rebuild_bm25_sync(self) -> None:
+        """重建 BM25 索引 (同步，用于线程池)"""
+        tokenized = [self._tokenize(doc.content) for doc in self._doc_store]
+        self._bm25 = BM25Okapi(tokenized)
+        self._save_bm25_cache()
     
     async def embed_text(self, text: str) -> List[float]:
         """获取文本 Embedding"""
