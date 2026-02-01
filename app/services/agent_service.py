@@ -10,6 +10,7 @@ from typing import Set, Tuple, List
 from datetime import datetime
 from app.core.config import settings, agent_config
 from app.utils.llm_client import client
+from app.utils.repo_lock import RepoLock
 from app.services.github_service import get_repo_structure, get_file_content
 from app.services.vector_service import store_manager
 from app.services.chunking_service import UniversalChunker, ChunkingConfig
@@ -184,6 +185,36 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
     )
     start_time = time.time()
     
+    # === 检查是否有其他用户正在分析同一仓库 ===
+    if not regenerate_only:
+        if await RepoLock.is_locked(session_id):
+            yield json.dumps({
+                "step": "waiting", 
+                "message": f"⏳ Another user is analyzing this repository. Please wait..."
+            })
+    
+    # === 获取仓库锁 (仅写操作需要) ===
+    try:
+        async with RepoLock.acquire(session_id):
+            async for event in _agent_stream_inner(
+                repo_url, session_id, language, regenerate_only, 
+                short_id, trace_id, start_time
+            ):
+                yield event
+    except TimeoutError as e:
+        yield json.dumps({
+            "step": "error",
+            "message": f"❌ {str(e)}. The repository is being analyzed by another user."
+        })
+
+
+async def _agent_stream_inner(
+    repo_url: str, session_id: str, language: str, regenerate_only: bool,
+    short_id: str, trace_id: str, start_time: float
+):
+    """
+    实际的分析流程 (在锁保护下执行)
+    """
     try:
         vector_db = store_manager.get_store(session_id)
         
@@ -399,7 +430,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
                     "file_tree": file_tree_str,
                     "summary": context_summary[:8000]
                 }
-                vector_db.save_context(repo_url, global_context_data)
+                await vector_db.save_context_async(repo_url, global_context_data)
                 
                 yield json.dumps({"step": "indexing", "message": f"🧠 [Round {round_idx+1}] Processed {download_count} files. Knowledge graph updated."})
 
@@ -408,6 +439,65 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
         
         # === 报告生成 (两种模式共用) ===
         
+        # === P0: 向量检索补充关键代码片段 ===
+        yield json.dumps({"step": "enriching", "message": "🔍 Retrieving key code snippets..."})
+        
+        key_queries = [
+            "main entry point initialization startup",
+            "core business logic handler processor",
+            "API routes endpoints controllers",
+            "database models schema ORM",
+            "authentication authorization middleware"
+        ]
+        
+        retrieved_snippets = []
+        try:
+            await vector_db.initialize()
+            for query in key_queries:
+                results = await vector_db.search_hybrid(query, top_k=2)
+                for r in results:
+                    snippet = r.get("content", "")[:400]
+                    file_path = r.get("file", "unknown")
+                    if snippet and snippet not in [s.split("]")[1] if "]" in s else s for s in retrieved_snippets]:
+                        retrieved_snippets.append(f"[{file_path}]\n{snippet}")
+        except Exception as e:
+            print(f"⚠️ 向量检索失败: {e}")
+        
+        code_snippets_section = "\n\n".join(retrieved_snippets[:8]) if retrieved_snippets else ""
+        
+        # === P1: 依赖文件解析 ===
+        dep_files = ["requirements.txt", "pyproject.toml", "package.json", "go.mod", "Cargo.toml", "pom.xml", "build.gradle"]
+        dependencies_info = ""
+        
+        # 获取 file_list（regenerate_only 模式下需要重新获取）
+        if regenerate_only:
+            try:
+                temp_file_list = await get_repo_structure(repo_url)
+            except:
+                temp_file_list = []
+        else:
+            temp_file_list = file_list if 'file_list' in dir() else []
+        
+        for dep_file in dep_files:
+            matching = [f for f in temp_file_list if f.endswith(dep_file)]
+            for f in matching[:1]:  # 只取第一个匹配
+                try:
+                    content = await get_file_content(repo_url, f)
+                    if content:
+                        dependencies_info += f"\n[{f}]\n{content[:800]}\n"
+                except:
+                    pass
+        
+        # 构建增强的上下文
+        enhanced_context = f"""
+        {context_summary[:12000]}
+        
+        [Key Code Snippets (Retrieved by Semantic Search)]
+        {code_snippets_section}
+        
+        [Project Dependencies]
+        {dependencies_info if dependencies_info else "No dependency file found."}
+        """
 
         repo_map_injection = f"""
         [Project Repo Map (Structure)]
@@ -423,11 +513,12 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
             你是一位务实的技术专家（Tech Lead）。
             
             [输入数据]
-            {repo_map_injection}  <-- 插入 Repo Map
+            {repo_map_injection}
 
             分析的文件: {list(visited_files)}
-            代码知识库: 
-            {context_summary[:15000]}
+            
+            [代码知识库与关键片段]
+            {enhanced_context}
             
             [严格限制]
             1. **不进行代码审查**: 不要列出 Bug、缺失功能或改进建议。
@@ -479,11 +570,12 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
             [Role]
             You are a **Pragmatic Tech Lead**. Your goal is to create a **"3-Pages" Architecture Overview** for a developer who wants to understand this repo in 5 minutes.
             [Input Data]
-            {repo_map_injection}  <-- Injecting Repo Map
+            {repo_map_injection}
 
             Files analyzed: {list(visited_files)}
-            Code Knowledge: 
-            {context_summary[:15000]}  # 稍微增加上下文长度，DeepSeek 处理得来
+            
+            [Code Knowledge & Key Snippets]
+            {enhanced_context}
             
             [Strict Constraints]
             1. **NO Code Review**: Do NOT list bugs, issues, missing features, or recommendations.
@@ -592,8 +684,8 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
             metadata={"step": "report_generation", "generated_chars": len(generated_text)}
         )
         
-        # === 保存报告 (按语言存储) ===
-        vector_db.save_report(generated_text, language)
+        # === 保存报告 (按语言存储，异步避免阻塞) ===
+        await vector_db.save_report_async(generated_text, language)
 
         yield json.dumps({"step": "finish", "message": "✅ Analysis Complete!"})
 
