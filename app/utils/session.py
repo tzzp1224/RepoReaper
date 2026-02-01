@@ -24,9 +24,9 @@ def normalize_repo_url(url: str) -> str:
     - git@github.com:owner/repo.git
     
     Returns:
-        标准化的 URL: https://github.com/owner/repo
+        标准化的 URL: https://github.com/owner/repo (全小写)
     """
-    url = url.strip()
+    url = url.strip().lower()  # 统一转为小写
     
     # 处理 SSH 格式
     if url.startswith('git@'):
