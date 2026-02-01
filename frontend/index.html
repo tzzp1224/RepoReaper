@@ -93,6 +93,30 @@
         button.btn-stop:hover {
             background: #b91c1c;
         }
+        
+        /* === 智能按钮状态样式 === */
+        button.btn-analyze {
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+        }
+        button.btn-analyze:hover {
+            background: linear-gradient(135deg, #1d4ed8, #1e40af);
+        }
+        button.btn-generate {
+            background: linear-gradient(135deg, #10b981, #059669);
+        }
+        button.btn-generate:hover {
+            background: linear-gradient(135deg, #059669, #047857);
+        }
+        button.btn-reanalyze {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+        }
+        button.btn-reanalyze:hover {
+            background: linear-gradient(135deg, #d97706, #b45309);
+        }
+        button.btn-checking {
+            background: #94a3b8;
+            cursor: wait;
+        }
 
         /* === [新增] 美观的语言切换开关样式 === */
         .lang-toggle {
@@ -134,7 +158,73 @@
 
         /* 日志区域 */
         .logs-area {
-            background: #f1f5f9; color: #475569; padding: 16px; border-radius: 8px; height: 140px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 15px; margin-bottom: 20px; line-height: 1.6; flex-shrink: 0; border: 1px solid var(--border-color);
+            background: #f1f5f9; color: #475569; padding: 16px; border-radius: 8px; height: 140px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 15px; margin-bottom: 12px; line-height: 1.6; flex-shrink: 0; border: 1px solid var(--border-color);
+        }
+        
+        /* === 智能提示区域样式 === */
+        .smart-hint {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 12px 16px;
+            margin-bottom: 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.5;
+            animation: slideIn 0.3s ease-out;
+        }
+        .smart-hint.hint-info {
+            background: linear-gradient(135deg, #e0f2fe, #f0f9ff);
+            border: 1px solid #7dd3fc;
+            color: #0369a1;
+        }
+        .smart-hint.hint-success {
+            background: linear-gradient(135deg, #d1fae5, #ecfdf5);
+            border: 1px solid #6ee7b7;
+            color: #047857;
+        }
+        .smart-hint.hint-warning {
+            background: linear-gradient(135deg, #fef3c7, #fffbeb);
+            border: 1px solid #fcd34d;
+            color: #92400e;
+        }
+        .smart-hint .hint-icon {
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+        .smart-hint .hint-text {
+            flex: 1;
+        }
+        .smart-hint .hint-text strong {
+            font-weight: 600;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        /* 报告下载工具栏 */
+        .report-toolbar {
+            display: flex;
+            gap: 12px;
+            padding: 10px 16px;
+            background: #f8fafc;
+            border-bottom: 1px solid var(--border-color);
+            border-radius: 8px 8px 0 0;
+        }
+        .download-btn {
+            padding: 6px 14px;
+            font-size: 13px;
+            background: #e2e8f0;
+            color: #334155;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .download-btn:hover {
+            background: #cbd5e1;
+            border-color: #94a3b8;
         }
 
         /* === Markdown 内容样式增强 (表格与结构) === */
@@ -294,7 +384,7 @@
 <body>
 
 <div class="header">
-    <h1><span>🧠</span> GitHub RAG Agent <span class="badge">v5.2 Multi-Lang</span></h1>
+    <h1><span>🧠</span> GitHub RAG Agent <span class="badge">v5.4 Smart Hints</span></h1>
     <div style="font-size: 14px; color: var(--text-secondary);">Session: <span id="sessionIdDisplay">...</span></div>
 </div>
 
@@ -303,25 +393,39 @@
     <div class="left-panel" id="leftPanel">
         <div class="input-bar">
             <form onsubmit="return false;" style="display: contents;">
-                <input type="text" id="repoUrl" value="https://github.com/fastapi/fastapi" 
-                    placeholder="Enter GitHub Repo URL..." 
-                    onkeypress="handleRepoKeyPress(event)">
+                <input type="text" id="repoUrl" value="" 
+                    placeholder="Enter GitHub Repo URL (e.g., https://github.com/owner/repo)" 
+                    onkeypress="handleRepoKeyPress(event)"
+                    oninput="onUrlChange()">
                 
                 <div class="lang-toggle">
-                    <input type="radio" id="lang-en" name="lang" value="en" checked>
+                    <input type="radio" id="lang-en" name="lang" value="en" checked onchange="onLanguageChange()">
                     <label for="lang-en" title="Generate report in English">ENG</label>
                     
-                    <input type="radio" id="lang-zh" name="lang" value="zh">
+                    <input type="radio" id="lang-zh" name="lang" value="zh" onchange="onLanguageChange()">
                     <label for="lang-zh" title="使用中文生成报告">中文</label>
                 </div>
                 
-                <button type="button" onclick="startAnalysis()" id="btn-analyze">Analyze</button>
+                <button type="button" onclick="handleAnalyzeClick()" id="btn-analyze" class="btn-analyze">🔍 Analyze</button>
             </form>
         </div>
         
         <div class="panel-content">
             <div class="logs-area" id="logs">
                 <div>[System] Ready to enter...</div>
+            </div>
+            <!-- 智能提示区域 -->
+            <div class="smart-hint" id="smartHint" style="display: none;">
+                <span class="hint-icon">💡</span>
+                <span class="hint-text" id="hintText"></span>
+            </div>
+            <div class="report-toolbar" id="reportToolbar" style="display: none; padding: 8px 16px; border-bottom: 1px solid #334155; background: #1e293b;">
+                <button onclick="downloadMarkdown()" class="download-btn" title="Download as Markdown">
+                    📄 Markdown
+                </button>
+                <button onclick="printReport()" class="download-btn" title="Print / Save as PDF">
+                    🖨️ Print/PDF
+                </button>
             </div>
             <div class="markdown-body" id="report">
                 <div style="text-align: center; color: #94a3b8; margin-top: 80px; font-size: 18px;">
@@ -362,7 +466,275 @@
     const API_BASE = "";
     let fullReportMarkdown = "";
     let currentSessionId = null;  // 基于仓库 URL 的 Session ID
-    let currentRepoUrl = "";      // 当前仓库 URL
+    let currentRepoUrl = "";      // 当前仓库 URL（已分析的）
+    let cachedReports = {};       // 缓存已加载的报告 { "en": "...", "zh": "..." }
+    let lastCheckedUrl = "";      // 上次检查的 URL
+    let lastCheckResult = null;   // 上次检查结果缓存
+    let urlCheckTimeout = null;   // URL 变化防抖定时器
+    
+    // === 按钮状态枚举 ===
+    const BTN_STATE = {
+        ANALYZE: 'analyze',      // 蓝色：全新分析
+        GENERATE: 'generate',    // 绿色：仅生成报告（复用索引）
+        REANALYZE: 'reanalyze',  // 橙色：强制重新分析
+        CHECKING: 'checking',    // 灰色：检查中
+        ANALYZING: 'analyzing'   // 禁用：分析中
+    };
+    let currentBtnState = BTN_STATE.ANALYZE;
+    
+    // === 获取当前语言 ===
+    function getCurrentLang() {
+        return document.querySelector('input[name="lang"]:checked').value;
+    }
+    
+    // === 双语提示消息 ===
+    const HINTS = {
+        // 有报告可用
+        reportReady: {
+            en: '<strong>Report ready!</strong> Switch language to view another version, or click <strong>Reanalyze</strong> to regenerate.',
+            zh: '<strong>报告已加载！</strong> 可切换语言查看其他版本，或点击 <strong>Reanalyze</strong> 重新生成。'
+        },
+        // 可以快速生成
+        canGenerate: {
+            en: '<strong>Index found!</strong> Click <strong>Generate</strong> to quickly create a report (no re-indexing needed).',
+            zh: '<strong>已有索引！</strong> 点击 <strong>Generate</strong> 可快速生成报告（无需重新索引）。'
+        },
+        // 需要完整分析
+        needAnalyze: {
+            en: '<strong>New repository.</strong> Click <strong>Analyze</strong> to start code indexing and report generation.',
+            zh: '<strong>新仓库。</strong> 点击 <strong>Analyze</strong> 开始代码索引和报告生成。'
+        },
+        // 语言切换 - 有缓存
+        langSwitched: {
+            en: '<strong>Switched to English report</strong> (from cache).',
+            zh: '<strong>已切换到中文报告</strong>（来自缓存）。'
+        },
+        // 语言切换 - 需要生成
+        langNeedGenerate: {
+            en: '<strong>No English report yet.</strong> Click <strong>Generate EN</strong> to create one (fast, uses existing index).',
+            zh: '<strong>暂无中文报告。</strong> 点击 <strong>Generate 中文</strong> 快速生成（复用现有索引）。'
+        }
+    };
+    
+    // === 显示智能提示 ===
+    function showHint(hintKey, type = 'info', langOverride = null) {
+        const hintDiv = document.getElementById('smartHint');
+        const hintText = document.getElementById('hintText');
+        const lang = langOverride || getCurrentLang();
+        
+        if (!HINTS[hintKey]) {
+            hideHint();
+            return;
+        }
+        
+        const message = HINTS[hintKey][lang] || HINTS[hintKey]['en'];
+        
+        hintDiv.className = 'smart-hint hint-' + type;
+        hintText.innerHTML = message;
+        hintDiv.style.display = 'flex';
+    }
+    
+    // === 隐藏提示 ===
+    function hideHint() {
+        document.getElementById('smartHint').style.display = 'none';
+    }
+    
+    // === 设置按钮状态 ===
+    function setButtonState(state, customText = null) {
+        const btn = document.getElementById('btn-analyze');
+        const lang = getCurrentLang();
+        const langLabel = lang === 'zh' ? '中文' : 'EN';
+        
+        // 移除所有状态类
+        btn.classList.remove('btn-analyze', 'btn-generate', 'btn-reanalyze', 'btn-checking');
+        btn.disabled = false;
+        
+        currentBtnState = state;
+        
+        switch (state) {
+            case BTN_STATE.ANALYZE:
+                btn.classList.add('btn-analyze');
+                btn.textContent = customText || '🔍 Analyze';
+                break;
+            case BTN_STATE.GENERATE:
+                btn.classList.add('btn-generate');
+                btn.textContent = customText || `🌐 Generate ${langLabel}`;
+                break;
+            case BTN_STATE.REANALYZE:
+                btn.classList.add('btn-reanalyze');
+                btn.textContent = customText || '🔄 Reanalyze';
+                break;
+            case BTN_STATE.CHECKING:
+                btn.classList.add('btn-checking');
+                btn.textContent = '⏳ Checking...';
+                btn.disabled = true;
+                break;
+            case BTN_STATE.ANALYZING:
+                btn.classList.add('btn-checking');
+                btn.textContent = '⏳ Analyzing...';
+                btn.disabled = true;
+                break;
+        }
+    }
+    
+    // === URL 变化监听（防抖）===
+    function onUrlChange() {
+        clearTimeout(urlCheckTimeout);
+        hideHint();  // URL 变化时先隐藏提示
+        urlCheckTimeout = setTimeout(() => {
+            checkUrlAndUpdateState();
+        }, 500);  // 500ms 防抖
+    }
+    
+    // === 检查 URL 并更新按钮状态 ===
+    async function checkUrlAndUpdateState() {
+        const url = document.getElementById('repoUrl').value.trim();
+        const lang = document.querySelector('input[name="lang"]:checked').value;
+        
+        if (!url) {
+            setButtonState(BTN_STATE.ANALYZE);
+            return;
+        }
+        
+        // URL 变化，清空本地缓存
+        if (url !== currentRepoUrl) {
+            cachedReports = {};
+        }
+        
+        // 如果 URL 没变且有缓存结果，直接使用
+        if (url === lastCheckedUrl && lastCheckResult) {
+            applyCheckResult(lastCheckResult, lang);
+            return;
+        }
+        
+        setButtonState(BTN_STATE.CHECKING);
+        logAppend(`🔍 Checking repository status...`, "#64748b");
+        
+        try {
+            const result = await checkRepoSession(url, lang);
+            lastCheckedUrl = url;
+            lastCheckResult = result;
+            currentSessionId = result.session_id;
+            updateSessionDisplay(currentSessionId);
+            applyCheckResult(result, lang);
+        } catch (e) {
+            console.error('Check failed:', e);
+            setButtonState(BTN_STATE.ANALYZE);
+        }
+    }
+    
+    // === 应用检查结果更新 UI ===
+    function applyCheckResult(result, lang) {
+        const reportDiv = document.getElementById('report');
+        const toolbar = document.getElementById('reportToolbar');
+        
+        if (result.exists && result.report) {
+            // 有该语言的报告 → 显示报告，按钮为 Reanalyze
+            fullReportMarkdown = result.report;
+            cachedReports[lang] = result.report;
+            reportDiv.innerHTML = marked.parse(fullReportMarkdown);
+            renderMermaidDiagrams(reportDiv);
+            showReportToolbar();
+            toggleChat(true);
+            setButtonState(BTN_STATE.REANALYZE);
+            showHint('reportReady', 'success');
+            logAppend(`✅ Found ${lang.toUpperCase()} report (cached)`, "#15803d");
+        } else if (result.has_index) {
+            // 有索引但没有该语言报告 → 按钮为 Generate
+            const availableLangs = result.available_languages || [];
+            reportDiv.innerHTML = `<div style="text-align: center; color: #94a3b8; margin-top: 80px; font-size: 16px;">
+                📚 Code index exists. Available reports: [${availableLangs.join(', ') || 'none'}]<br><br>
+                <span style="font-size: 14px;">Click <strong>Generate</strong> to create a ${lang.toUpperCase()} report.</span>
+            </div>`;
+            if (toolbar) toolbar.style.display = 'none';
+            toggleChat(false);
+            setButtonState(BTN_STATE.GENERATE);
+            showHint('canGenerate', 'info');
+            logAppend(`📚 Index found. Click Generate to create ${lang.toUpperCase()} report.`, "#0ea5e9");
+        } else {
+            // 全新仓库 → 按钮为 Analyze
+            reportDiv.innerHTML = `<div style="text-align: center; color: #94a3b8; margin-top: 80px; font-size: 18px;">
+                📊 The project architecture report will be generated here.
+            </div>`;
+            if (toolbar) toolbar.style.display = 'none';
+            toggleChat(false);
+            setButtonState(BTN_STATE.ANALYZE);
+            showHint('needAnalyze', 'warning');
+            logAppend(`🆕 New repository. Click Analyze to start.`, "#64748b");
+        }
+    }
+    
+    // === 语言切换事件 ===
+    async function onLanguageChange() {
+        const newLang = document.querySelector('input[name="lang"]:checked').value;
+        const url = document.getElementById('repoUrl').value.trim();
+        
+        if (!url) return;
+        
+        const reportDiv = document.getElementById('report');
+        const toolbar = document.getElementById('reportToolbar');
+        
+        // 1. 先检查本地缓存
+        if (cachedReports[newLang]) {
+            fullReportMarkdown = cachedReports[newLang];
+            reportDiv.innerHTML = marked.parse(fullReportMarkdown);
+            renderMermaidDiagrams(reportDiv);
+            showReportToolbar();
+            toggleChat(true);
+            setButtonState(BTN_STATE.REANALYZE);
+            showHint('langSwitched', 'success', newLang);
+            logAppend(`🔄 Switched to ${newLang.toUpperCase()} report (from cache)`, "#0ea5e9");
+            return;
+        }
+        
+        // 2. 没有本地缓存，检查后端
+        setButtonState(BTN_STATE.CHECKING);
+        hideHint();
+        logAppend(`🔍 Checking ${newLang.toUpperCase()} report...`, "#64748b");
+        
+        try {
+            const result = await checkRepoSession(url, newLang);
+            lastCheckedUrl = url;
+            lastCheckResult = result;
+            currentSessionId = result.session_id;
+            
+            if (result.exists && result.report) {
+                // 后端有该语言报告
+                cachedReports[newLang] = result.report;
+                fullReportMarkdown = result.report;
+                reportDiv.innerHTML = marked.parse(fullReportMarkdown);
+                renderMermaidDiagrams(reportDiv);
+                showReportToolbar();
+                toggleChat(true);
+                setButtonState(BTN_STATE.REANALYZE);
+                showHint('langSwitched', 'success', newLang);
+                logAppend(`📦 Loaded ${newLang.toUpperCase()} report`, "#15803d");
+            } else if (result.has_index) {
+                // 有索引，无该语言报告
+                reportDiv.innerHTML = `<div style="text-align: center; color: #94a3b8; margin-top: 80px; font-size: 16px;">
+                    📝 No ${newLang.toUpperCase()} report available yet.<br><br>
+                    <span style="font-size: 14px;">Click <strong>Generate</strong> to create a ${newLang.toUpperCase()} report.</span>
+                </div>`;
+                if (toolbar) toolbar.style.display = 'none';
+                toggleChat(false);
+                setButtonState(BTN_STATE.GENERATE);
+                showHint('langNeedGenerate', 'info', newLang);
+                logAppend(`ℹ️ No ${newLang.toUpperCase()} report. Click Generate.`, "#f59e0b");
+            } else {
+                // 无索引
+                reportDiv.innerHTML = `<div style="text-align: center; color: #94a3b8; margin-top: 80px; font-size: 18px;">
+                    📊 The project architecture report will be generated here.
+                </div>`;
+                if (toolbar) toolbar.style.display = 'none';
+                toggleChat(false);
+                setButtonState(BTN_STATE.ANALYZE);
+                showHint('needAnalyze', 'warning', newLang);
+            }
+        } catch (e) {
+            console.error('Language switch check failed:', e);
+            setButtonState(BTN_STATE.ANALYZE);
+        }
+    }
 
     // === 基于仓库 URL 生成 Session ID ===
     function generateRepoSessionId(repoUrl) {
@@ -524,101 +896,196 @@
         }
     }
 
-    // 业务逻辑
-    async function startAnalysis() {
+    // === 主按钮点击处理 ===
+    function handleAnalyzeClick() {
         const url = document.getElementById('repoUrl').value.trim();
-        if (!url) { alert("Please Enter URL"); return; }
+        if (!url) { 
+            alert("Please enter a GitHub repository URL"); 
+            return; 
+        }
         
-        // === 获取选中的语言选项 ===
         const lang = document.querySelector('input[name="lang"]:checked').value;
-
-        const logDiv = document.getElementById('logs');
+        
+        switch (currentBtnState) {
+            case BTN_STATE.ANALYZE:
+                // 全新分析
+                startAnalysis(false);
+                break;
+            case BTN_STATE.GENERATE:
+                // 复用索引，仅生成报告
+                startAnalysis(true);
+                break;
+            case BTN_STATE.REANALYZE:
+                // 强制重新分析
+                if (confirm(`This will re-analyze the repository from scratch.\n\nContinue?`)) {
+                    // 清空该语言的缓存
+                    delete cachedReports[lang];
+                    startAnalysis(false);
+                }
+                break;
+            default:
+                // CHECKING/ANALYZING 状态，按钮应该已禁用
+                break;
+        }
+    }
+    
+    // === 核心分析逻辑 ===
+    async function startAnalysis(regenerateOnly = false) {
+        const url = document.getElementById('repoUrl').value.trim();
+        const lang = document.querySelector('input[name="lang"]:checked').value;
         const reportDiv = document.getElementById('report');
-        const btnAnalyze = document.getElementById('btn-analyze');
+        const toolbar = document.getElementById('reportToolbar');
         
-        // === 检查是否已有分析结果 ===
-        logDiv.innerHTML = `<div>[System] 🔍 Checking existing analysis (${lang.toUpperCase()})...</div>`;
-        btnAnalyze.disabled = true;
-        btnAnalyze.textContent = "Checking...";
+        // 隐藏工具栏和提示
+        if (toolbar) toolbar.style.display = 'none';
+        hideHint();
         
-        const checkResult = await checkRepoSession(url, lang);
-        currentSessionId = checkResult.session_id;
+        // 设置按钮为分析中状态
+        setButtonState(BTN_STATE.ANALYZING);
+        
+        // 获取 session ID
+        if (!currentSessionId || url !== currentRepoUrl) {
+            const checkResult = await checkRepoSession(url, lang);
+            currentSessionId = checkResult.session_id;
+        }
         currentRepoUrl = url;
         updateSessionDisplay(currentSessionId);
         
-        if (checkResult.exists && checkResult.report) {
-            // === 已有该语言的分析结果，直接加载 ===
-            logDiv.innerHTML = `<div>[System] ✅ Found existing ${lang.toUpperCase()} analysis! Loading...</div>`;
-            fullReportMarkdown = checkResult.report;
-            reportDiv.innerHTML = marked.parse(fullReportMarkdown);
-            
-            // 渲染图表
-            await renderMermaidDiagrams(reportDiv);
-            
-            logAppend(`📦 Loaded ${lang.toUpperCase()} report from cache (Session: ${currentSessionId.substring(currentSessionId.length - 8)})`, "#15803d");
-            btnAnalyze.disabled = false;
-            btnAnalyze.textContent = "Reanalysis";
-            toggleChat(true);
-            addMsg("ai", "🎉 Previous analysis loaded! You can continue asking questions.");
-            return;
-        }
-        
-        // === 判断是否可以复用索引 ===
-        let regenerateOnly = false;
-        if (checkResult.has_index && !checkResult.report) {
-            const availableLangs = checkResult.available_languages || [];
-            if (availableLangs.length > 0) {
-                logDiv.innerHTML = `<div>[System] 📚 Index exists. Available reports: [${availableLangs.join(', ')}]. Generating ${lang.toUpperCase()} report...</div>`;
-                logAppend(`💡 Reusing existing code index, only generating ${lang.toUpperCase()} report`, "#0ea5e9");
-                regenerateOnly = true;  // 复用索引，仅生成报告
-            }
-        }
-        
-        // === 开始分析 ===
-        if (!regenerateOnly) {
-            logDiv.innerHTML = `<div>[System] 🚀 Initialize Agent (Session: ${currentSessionId.substring(currentSessionId.length - 8)}, Lang: ${lang.toUpperCase()})...</div>`;
-        }
-        reportDiv.innerHTML = "<div style='color:#94a3b8; text-align:center; margin-top:40px'>⏳ Analyzing the code architecture in depth...</div>";
+        // 清空并显示加载提示
         fullReportMarkdown = "";
-        
-        btnAnalyze.textContent = "Analyzing...";
+        const actionText = regenerateOnly ? 'Generating report' : 'Analyzing code';
+        reportDiv.innerHTML = `<div style='color:#94a3b8; text-align:center; margin-top:40px'>⏳ ${actionText} (${lang.toUpperCase()})...</div>`;
         toggleChat(false);
-
-        const eventSource = new EventSource(`${API_BASE}/analyze?url=${encodeURIComponent(url)}&session_id=${currentSessionId}&language=${lang}&regenerate_only=${regenerateOnly}`);
+        
+        const logAction = regenerateOnly ? '📝 Generating report (reusing index)' : '🚀 Starting full analysis';
+        document.getElementById('logs').innerHTML = `<div>[System] ${logAction} (${lang.toUpperCase()})...</div>`;
+        
+        // 开始 SSE 流
+        const eventSource = new EventSource(
+            `${API_BASE}/analyze?url=${encodeURIComponent(url)}&session_id=${currentSessionId}&language=${lang}&regenerate_only=${regenerateOnly}`
+        );
         
         eventSource.onmessage = function(event) {
             const data = JSON.parse(event.data);
+            
             if (data.step === 'report_chunk') {
                 fullReportMarkdown += data.chunk;
                 reportDiv.innerHTML = marked.parse(fullReportMarkdown);
                 const panelContent = reportDiv.parentElement;
                 panelContent.scrollTop = panelContent.scrollHeight;
+                
             } else if (data.step === 'finish') {
-                logAppend(`✅ ${data.message}`, "#15803d"); 
+                logAppend(`✅ ${data.message}`, "#15803d");
                 eventSource.close();
-                btnAnalyze.disabled = false;
-                btnAnalyze.textContent = "Reanalysis";
+                
+                // 缓存报告
+                cachedReports[lang] = fullReportMarkdown;
+                
+                // 更新按钮状态
+                setButtonState(BTN_STATE.REANALYZE);
+                showHint('reportReady', 'success');
                 toggleChat(true);
+                showReportToolbar();
+                renderMermaidDiagrams(reportDiv);
                 addMsg("ai", "🎉 Analysis complete! You can ask questions now.");
                 
-                // 渲染左侧报告中的图表
-                renderMermaidDiagrams(reportDiv);
-
             } else if (data.step === 'error') {
-                logAppend(`❌ ${data.message}`, "#b91c1c"); 
+                logAppend(`❌ ${data.message}`, "#b91c1c");
                 eventSource.close();
-                btnAnalyze.disabled = false;
-                btnAnalyze.textContent = "Analyze";
+                // 错误时恢复到适当状态
+                if (lastCheckResult && lastCheckResult.has_index) {
+                    setButtonState(BTN_STATE.GENERATE);
+                } else {
+                    setButtonState(BTN_STATE.ANALYZE);
+                }
+                
             } else {
                 logAppend(`👉 ${data.message}`);
             }
         };
+        
         eventSource.onerror = function(err) {
-            logAppend("❌ Disconnected", "#b91c1c");
+            logAppend("❌ Connection lost", "#b91c1c");
             eventSource.close();
-            btnAnalyze.disabled = false;
-            btnAnalyze.textContent = "Analyze";
+            setButtonState(BTN_STATE.ANALYZE);
         };
+    }
+
+    // === 报告工具栏 ===
+    function showReportToolbar() {
+        const toolbar = document.getElementById('reportToolbar');
+        if (toolbar) toolbar.style.display = 'flex';
+    }
+    
+    // === 下载 Markdown ===
+    function downloadMarkdown() {
+        if (!fullReportMarkdown) {
+            alert("No report to download");
+            return;
+        }
+        const blob = new Blob([fullReportMarkdown], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const repoName = currentRepoUrl.split('/').pop() || 'report';
+        a.download = `${repoName}_analysis.md`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+    
+    // === 下载 PDF (使用浏览器打印功能) ===
+    function printReport() {
+        if (!fullReportMarkdown) {
+            alert("No report to print");
+            return;
+        }
+        
+        const repoName = currentRepoUrl.split('/').pop() || 'report';
+        
+        // 处理 Mermaid 图表占位符
+        const processedHtml = marked.parse(fullReportMarkdown).replace(
+            /<pre class="mermaid">[\s\S]*?<\/pre>/g, 
+            '<div class="mermaid-placeholder">📊 Mermaid diagram (view in browser)<\/div>'
+        );
+        
+        // 创建打印窗口
+        const printWindow = window.open('', '_blank');
+        
+        // 避免在模板字符串中出现 </body></html> 导致解析问题
+        const htmlContent = [
+            '<!DOCTYPE html>',
+            '<html>',
+            '<head>',
+            '<title>' + repoName + ' - Analysis Report<\/title>',
+            '<style>',
+            'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; max-width: 900px; margin: 0 auto; padding: 40px; color: #1e293b; }',
+            'h1, h2, h3 { color: #0f172a; margin-top: 1.5em; }',
+            'h1 { border-bottom: 2px solid #e2e8f0; padding-bottom: 0.3em; }',
+            'h2 { border-bottom: 1px solid #e2e8f0; padding-bottom: 0.2em; }',
+            'code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }',
+            'pre { background: #f8fafc; padding: 16px; border-radius: 8px; overflow-x: auto; border: 1px solid #e2e8f0; }',
+            'pre code { background: none; padding: 0; }',
+            'table { width: 100%; border-collapse: collapse; margin: 1em 0; }',
+            'th, td { border: 1px solid #e2e8f0; padding: 10px 12px; text-align: left; }',
+            'th { background: #f8fafc; font-weight: 600; }',
+            'blockquote { border-left: 4px solid #3b82f6; margin: 1em 0; padding-left: 1em; color: #64748b; }',
+            'ul, ol { padding-left: 1.5em; }',
+            'li { margin: 0.3em 0; }',
+            '.mermaid-placeholder { background: #fef3c7; border: 1px dashed #f59e0b; padding: 20px; text-align: center; color: #92400e; border-radius: 8px; margin: 1em 0; }',
+            '@media print { body { padding: 20px; } pre { white-space: pre-wrap; word-wrap: break-word; } }',
+            '<\/style>',
+            '<\/head>',
+            '<body>',
+            processedHtml,
+            '<script>window.print();<\/script>',
+            '<\/body>',
+            '<\/html>'
+        ].join('\n');
+        
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
     }
 
     // === 聊天中止控制 ===
