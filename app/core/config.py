@@ -1,19 +1,120 @@
 # 文件路径: app/core/config.py
 """
-应用配置模块
+应用配置模块 - 统一配置中心
 
 支持多 LLM 供应商配置:
 - OpenAI (GPT-4, GPT-4o 等)
 - DeepSeek (deepseek-chat 等)
 - Anthropic (Claude 系列)
-- Google Gemini (gemini-1.5-pro 等)
+- Google Gemini (gemini-3-flash-preview 等)
 """
 import os
+from dataclasses import dataclass, field
+from typing import Optional, Tuple
 from dotenv import load_dotenv
-from typing import Optional
 
 # 加载 .env 文件
 load_dotenv()
+
+
+# ============================================================
+# Agent 分析配置
+# ============================================================
+
+@dataclass
+class AgentAnalysisConfig:
+    """Agent 分析引擎配置"""
+    # Repo Map 配置
+    initial_map_limit: int = 15           # 初始 Repo Map 文件数量
+    max_symbols_per_file: int = 30        # 每文件最大符号数
+    
+    # 分析轮次配置
+    max_rounds: int = 3                   # 最大分析轮数
+    files_per_round: int = 3              # 每轮选择文件数
+    max_context_length: int = 15000       # 上下文最大长度
+    
+    # 优先级配置
+    priority_exts: Tuple[str, ...] = (
+        '.py', '.java', '.go', '.js', '.ts', '.tsx', '.cpp', '.cs', '.rs'
+    )
+    priority_keywords: Tuple[str, ...] = (
+        'main', 'app', 'core', 'api', 'service', 'utils', 'controller', 'model', 'config'
+    )
+
+
+# ============================================================
+# 向量服务配置
+# ============================================================
+
+@dataclass
+class VectorServiceConfig:
+    """向量服务配置"""
+    # 数据目录
+    data_dir: str = "data"
+    context_dir: str = "data/contexts"
+    cache_version: str = "2.0"
+    
+    # Embedding 配置
+    embedding_api_url: str = "https://api.siliconflow.cn/v1"
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_batch_size: int = 50
+    embedding_max_length: int = 8000
+    embedding_concurrency: int = 5
+    embedding_dimensions: int = 1024
+    
+    # BM25 配置
+    tokenize_regex: str = r'[^a-zA-Z0-9_\.@\u4e00-\u9fa5]+'
+    
+    # 混合搜索 RRF 参数
+    rrf_k: int = 60
+    rrf_weight_vector: float = 1.0
+    rrf_weight_bm25: float = 0.3
+    search_oversample: int = 2
+    default_top_k: int = 3
+    
+    # Session LRU 缓存配置
+    session_max_count: int = 100          # 内存中最大 session 数
+
+
+# ============================================================
+# 对话记忆配置
+# ============================================================
+
+@dataclass
+class ConversationConfig:
+    """对话记忆配置"""
+    # 滑动窗口
+    max_recent_turns: int = 10             # 保留最近 N 轮对话
+    max_context_tokens: int = 8000        # 最大上下文 token 数
+    summary_threshold: int = 15           # 超过 N 轮开始压缩
+    # 对话记忆是纯内存存储，服务重启自动清空，无需定时清理
+
+
+# ============================================================
+# Qdrant 配置
+# ============================================================
+
+@dataclass
+class QdrantServiceConfig:
+    """Qdrant 向量数据库配置"""
+    host: str = "localhost"
+    port: int = 6333
+    grpc_port: int = 6334
+    prefer_grpc: bool = True
+    
+    use_local: bool = True
+    local_path: str = "data/qdrant_db"
+    
+    vector_size: int = 1024               # BGE-M3 维度
+    hnsw_m: int = 16
+    hnsw_ef_construct: int = 100
+    batch_size: int = 100
+    timeout: float = 30.0
+
+
+# ============================================================
+# LLM 供应商配置
+# ============================================================
 
 
 class Settings:
@@ -115,6 +216,16 @@ class Settings:
         print(f"✅ 配置验证通过 (Model: {self.default_model_name})")
 
 
+# ============================================================
+# 全局配置实例
+# ============================================================
+
+# LLM 设置
 settings = Settings()
-# 立即执行验证，确保启动时就暴露问题
 settings.validate()
+
+# 子系统配置
+agent_config = AgentAnalysisConfig()
+vector_config = VectorServiceConfig()
+conversation_config = ConversationConfig()
+qdrant_config = QdrantServiceConfig()
