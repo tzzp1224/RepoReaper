@@ -44,16 +44,32 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class QdrantConfig:
-    """Qdrant 配置"""
-    # 连接配置
+    """
+    Qdrant 配置
+    
+    支持三种模式:
+    - local: 本地嵌入式 (开发/单进程)
+    - server: Qdrant Server (多 Worker 生产环境)
+    - cloud: Qdrant Cloud (托管服务)
+    
+    环境变量:
+    - QDRANT_MODE: "local" | "server" | "cloud"
+    - QDRANT_URL: 服务器地址 (server/cloud 模式)
+    - QDRANT_API_KEY: API 密钥 (cloud 模式必需)
+    - QDRANT_LOCAL_PATH: 本地存储路径 (local 模式)
+    """
+    # 模式: "local" | "server" | "cloud"
+    mode: str = "local"
+    
+    # Server/Cloud 模式配置
+    url: Optional[str] = None
     host: str = "localhost"
     port: int = 6333
     grpc_port: int = 6334
     prefer_grpc: bool = True
     api_key: Optional[str] = None
     
-    # 使用本地存储 (开发/小规模部署)
-    use_local: bool = True
+    # Local 模式配置
     local_path: str = "data/qdrant_db"
     
     # 向量配置
@@ -73,19 +89,42 @@ class QdrantConfig:
     @classmethod
     def from_env(cls) -> "QdrantConfig":
         """从环境变量加载配置"""
+        mode = os.getenv("QDRANT_MODE", "local").lower()
+        
         return cls(
+            mode=mode,
+            url=os.getenv("QDRANT_URL"),
             host=os.getenv("QDRANT_HOST", "localhost"),
             port=int(os.getenv("QDRANT_PORT", "6333")),
             grpc_port=int(os.getenv("QDRANT_GRPC_PORT", "6334")),
             api_key=os.getenv("QDRANT_API_KEY"),
-            use_local=os.getenv("QDRANT_USE_LOCAL", "true").lower() == "true",
-            local_path=os.getenv("QDRANT_PATH", "data/qdrant_db"),
+            local_path=os.getenv("QDRANT_LOCAL_PATH", "data/qdrant_db"),
             vector_size=int(os.getenv("QDRANT_VECTOR_SIZE", "1024")),
+            prefer_grpc=os.getenv("QDRANT_PREFER_GRPC", "true").lower() == "true",
         )
+    
+    @property
+    def is_local(self) -> bool:
+        return self.mode == "local"
+    
+    @property
+    def is_server(self) -> bool:
+        return self.mode == "server"
+    
+    @property
+    def is_cloud(self) -> bool:
+        return self.mode == "cloud"
+    
+    def validate(self) -> None:
+        """验证配置"""
+        if self.is_cloud and not self.api_key:
+            raise ValueError("QDRANT_API_KEY is required for cloud mode")
+        if (self.is_server or self.is_cloud) and not (self.url or self.host):
+            raise ValueError("QDRANT_URL or QDRANT_HOST is required for server/cloud mode")
 
 
 # ============================================================
-# 全局共享客户端单例 (解决 Qdrant Local 并发访问问题)
+# 全局共享客户端单例
 # ============================================================
 
 _shared_client: Optional[AsyncQdrantClient] = None
@@ -97,32 +136,56 @@ async def get_shared_client(config: Optional[QdrantConfig] = None) -> AsyncQdran
     """
     获取共享的 Qdrant 客户端单例
     
-    Qdrant Local 模式只能有一个客户端实例访问存储目录，
-    因此所有 Session 必须共享同一个客户端。
+    支持三种模式:
+    - local: 本地嵌入式存储 (单进程，开发环境)
+    - server: Qdrant Server (多 Worker，Docker 部署)
+    - cloud: Qdrant Cloud (托管服务)
     """
     global _shared_client, _shared_config
     
     async with _client_lock:
         if _shared_client is None:
             _shared_config = config or QdrantConfig.from_env()
+            _shared_config.validate()
             
-            if _shared_config.use_local:
+            if _shared_config.is_local:
+                # Local 模式: 嵌入式存储
                 os.makedirs(_shared_config.local_path, exist_ok=True)
                 _shared_client = AsyncQdrantClient(
                     path=_shared_config.local_path,
                     timeout=_shared_config.timeout,
                 )
-                logger.info(f"📦 Qdrant 本地模式 (共享客户端): {_shared_config.local_path}")
+                logger.info(f"📦 Qdrant 本地模式: {_shared_config.local_path}")
+                
+            elif _shared_config.is_server:
+                # Server 模式: 连接 Qdrant Server
+                if _shared_config.url:
+                    _shared_client = AsyncQdrantClient(
+                        url=_shared_config.url,
+                        prefer_grpc=_shared_config.prefer_grpc,
+                        timeout=_shared_config.timeout,
+                    )
+                    logger.info(f"🌐 Qdrant Server 模式: {_shared_config.url}")
+                else:
+                    _shared_client = AsyncQdrantClient(
+                        host=_shared_config.host,
+                        port=_shared_config.port,
+                        grpc_port=_shared_config.grpc_port,
+                        prefer_grpc=_shared_config.prefer_grpc,
+                        timeout=_shared_config.timeout,
+                    )
+                    logger.info(f"🌐 Qdrant Server 模式: {_shared_config.host}:{_shared_config.port}")
+                    
             else:
+                # Cloud 模式: 连接 Qdrant Cloud
                 _shared_client = AsyncQdrantClient(
-                    host=_shared_config.host,
-                    port=_shared_config.port,
-                    grpc_port=_shared_config.grpc_port,
-                    prefer_grpc=_shared_config.prefer_grpc,
+                    url=_shared_config.url,
                     api_key=_shared_config.api_key,
                     timeout=_shared_config.timeout,
                 )
-                logger.info(f"🌐 Qdrant 远程模式: {_shared_config.host}:{_shared_config.port}")
+                logger.info(f"☁️ Qdrant Cloud 模式: {_shared_config.url}")
+        
+        return _shared_client
         
         return _shared_client
 
