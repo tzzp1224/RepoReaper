@@ -25,13 +25,13 @@ load_dotenv()
 class AgentAnalysisConfig:
     """Agent 分析引擎配置"""
     # Repo Map 配置
-    initial_map_limit: int = 15           # 初始 Repo Map 文件数量
-    max_symbols_per_file: int = 30        # 每文件最大符号数
+    initial_map_limit: int = 25           # 初始 Repo Map 文件数量 (提高精度)
+    max_symbols_per_file: int = 40        # 每文件最大符号数 (提高精度)
     
     # 分析轮次配置
-    max_rounds: int = 3                   # 最大分析轮数
-    files_per_round: int = 3              # 每轮选择文件数
-    max_context_length: int = 15000       # 上下文最大长度
+    max_rounds: int = 4                   # 最大分析轮数 (提高精度，因为报告可复用)
+    files_per_round: int = 5              # 每轮选择文件数 (提高精度)
+    max_context_length: int = 20000       # 上下文最大长度 (提高精度)
     
     # 优先级配置
     priority_exts: Tuple[str, ...] = (
@@ -96,14 +96,29 @@ class ConversationConfig:
 
 @dataclass
 class QdrantServiceConfig:
-    """Qdrant 向量数据库配置"""
-    host: str = "localhost"
-    port: int = 6333
-    grpc_port: int = 6334
-    prefer_grpc: bool = True
+    """
+    Qdrant 向量数据库配置
     
-    use_local: bool = True
-    local_path: str = "data/qdrant_db"
+    支持三种模式 (通过环境变量 QDRANT_MODE 切换):
+    - local: 本地嵌入式存储 (开发环境, 单 Worker)
+    - server: Qdrant Server Docker (生产环境, 多 Worker)
+    - cloud: Qdrant Cloud 托管服务
+    
+    环境变量:
+    - QDRANT_MODE: "local" | "server" | "cloud"
+    - QDRANT_URL: 服务器 URL (server/cloud 模式)
+    - QDRANT_API_KEY: API 密钥 (cloud 模式必需)
+    - QDRANT_LOCAL_PATH: 本地存储路径 (local 模式)
+    """
+    mode: str = os.getenv("QDRANT_MODE", "local")
+    url: str = os.getenv("QDRANT_URL", "")
+    host: str = os.getenv("QDRANT_HOST", "localhost")
+    port: int = int(os.getenv("QDRANT_PORT", "6333"))
+    grpc_port: int = int(os.getenv("QDRANT_GRPC_PORT", "6334"))
+    prefer_grpc: bool = True
+    api_key: str = os.getenv("QDRANT_API_KEY", "")
+    
+    local_path: str = os.getenv("QDRANT_LOCAL_PATH", "data/qdrant_db")
     
     vector_size: int = 1024               # BGE-M3 维度
     hnsw_m: int = 16
