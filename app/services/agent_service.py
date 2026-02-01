@@ -208,7 +208,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
             yield json.dumps({"step": "init", "message": f"🚀 [Session: {short_id}] Connecting to GitHub..."})
             await asyncio.sleep(0.5)
             
-            vector_db.reset_collection() 
+            await vector_db.reset()  # 使用异步方法
             
             chunker = UniversalChunker(config=ChunkingConfig(min_chunk_size=50))
 
