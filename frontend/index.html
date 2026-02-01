@@ -459,8 +459,16 @@
     // === Mermaid 初始化 ===
     mermaid.initialize({ 
         startOnLoad: false, 
-        theme: 'neutral', // 清爽灰白风格
-        securityLevel: 'loose' 
+        theme: 'neutral',
+        securityLevel: 'loose',
+        // 改进的配置以支持中文
+        flowchart: {
+            htmlLabels: true,
+            useMaxWidth: true
+        },
+        sequence: {
+            useMaxWidth: true
+        }
     });
 
     const API_BASE = "";
@@ -853,6 +861,60 @@
         if (event.key === "Escape") closeModal();
     });
 
+    // === Mermaid 中文预处理 ===
+    function sanitizeMermaidCode(code) {
+        let lines = code.split('\n');
+        
+        return lines.map(line => {
+            // 跳过注释和空行
+            if (line.trim().startsWith('%%') || line.trim() === '') {
+                return line;
+            }
+            
+            // 处理 graph/flowchart 节点定义: A[文本] -> A["文本"]
+            line = line.replace(/(\w+)\[([^\]"]+)\]/g, (match, id, text) => {
+                if (/[\u4e00-\u9fa5]/.test(text) || /[()（）：:,，]/.test(text)) {
+                    return `${id}["${text}"]`;
+                }
+                return match;
+            });
+            
+            // 处理圆角节点 A(文本)
+            line = line.replace(/(\w+)\(([^)"]+)\)/g, (match, id, text) => {
+                if (/[\u4e00-\u9fa5]/.test(text) || /[[\]{}：:,，]/.test(text)) {
+                    return `${id}("${text}")`;
+                }
+                return match;
+            });
+            
+            // 处理菱形节点 A{文本}
+            line = line.replace(/(\w+)\{([^}"]+)\}/g, (match, id, text) => {
+                if (/[\u4e00-\u9fa5]/.test(text) || /[[\]()：:,，]/.test(text)) {
+                    return `${id}{"${text}"}`;
+                }
+                return match;
+            });
+            
+            // 处理连线标签 -->|文本|
+            line = line.replace(/(\|)([^|"]+)(\|)/g, (match, p1, text, p2) => {
+                if (/[\u4e00-\u9fa5]/.test(text)) {
+                    return `|"${text}"|`;
+                }
+                return match;
+            });
+            
+            // 处理 sequenceDiagram 消息文本
+            line = line.replace(/(->|-->>?|<<--)([^:]+):\s*([^"'\n]+)$/g, (match, arrow, target, msg) => {
+                if (/[\u4e00-\u9fa5]/.test(msg) && !msg.startsWith('"')) {
+                    return `${arrow}${target}: "${msg.trim()}"`;
+                }
+                return match;
+            });
+            
+            return line;
+        }).join('\n');
+    }
+
     // === Mermaid 渲染与交互绑定 ===
     async function renderMermaidDiagrams(rootNode) {
         if (!rootNode) return;
@@ -863,7 +925,8 @@
         
         for (let i = 0; i < blocks.length; i++) {
             const block = blocks[i];
-            const code = block.textContent;
+            // 预处理 Mermaid 代码，修复中文问题
+            const code = sanitizeMermaidCode(block.textContent);
             const pre = block.parentElement; 
             
             const id = `mermaid-${Date.now()}-${i}`;

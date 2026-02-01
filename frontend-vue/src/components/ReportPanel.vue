@@ -34,9 +34,78 @@ onMounted(() => {
   mermaid.initialize({
     startOnLoad: false,
     theme: 'neutral',
-    securityLevel: 'loose'
+    securityLevel: 'loose',
+    // 改进的配置以支持中文
+    flowchart: {
+      htmlLabels: true,
+      useMaxWidth: true
+    },
+    sequence: {
+      useMaxWidth: true
+    }
   })
 })
+
+/**
+ * 预处理 Mermaid 代码，自动修复中文渲染问题
+ * - 为未加引号的中文节点添加引号
+ * - 处理特殊字符
+ */
+function sanitizeMermaidCode(code) {
+  let lines = code.split('\n')
+  
+  return lines.map(line => {
+    // 跳过注释和空行
+    if (line.trim().startsWith('%%') || line.trim() === '') {
+      return line
+    }
+    
+    // 处理 graph/flowchart 节点定义: A[文本] -> A["文本"]
+    // 匹配 节点ID[文本] 或 节点ID(文本) 或 节点ID{文本} 等形式
+    line = line.replace(/(\w+)\[([^\]"]+)\]/g, (match, id, text) => {
+      // 如果文本包含中文或特殊字符且未被引号包裹
+      if (/[\u4e00-\u9fa5]/.test(text) || /[()（）：:,，]/.test(text)) {
+        return `${id}["${text}"]`
+      }
+      return match
+    })
+    
+    // 处理圆角节点 A(文本)
+    line = line.replace(/(\w+)\(([^)"]+)\)/g, (match, id, text) => {
+      if (/[\u4e00-\u9fa5]/.test(text) || /[[\]{}：:,，]/.test(text)) {
+        return `${id}("${text}")`
+      }
+      return match
+    })
+    
+    // 处理菱形节点 A{文本}
+    line = line.replace(/(\w+)\{([^}"]+)\}/g, (match, id, text) => {
+      if (/[\u4e00-\u9fa5]/.test(text) || /[[\]()：:,，]/.test(text)) {
+        return `${id}{"${text}"}`
+      }
+      return match
+    })
+    
+    // 处理连线标签 -->|文本| 或 --|文本|-->
+    line = line.replace(/(\|)([^|"]+)(\|)/g, (match, p1, text, p2) => {
+      if (/[\u4e00-\u9fa5]/.test(text)) {
+        return `|"${text}"|`
+      }
+      return match
+    })
+    
+    // 处理 sequenceDiagram 中的消息文本
+    // User->>API: 发起请求 -> User->>API: "发起请求"
+    line = line.replace(/(->|-->>?|<<--)([^:]+):\s*([^"'\n]+)$/g, (match, arrow, target, msg) => {
+      if (/[\u4e00-\u9fa5]/.test(msg) && !msg.startsWith('"')) {
+        return `${arrow}${target}: "${msg.trim()}"`
+      }
+      return match
+    })
+    
+    return line
+  }).join('\n')
+}
 
 // 渲染 Markdown
 const renderedReport = computed(() => {
@@ -59,23 +128,33 @@ async function renderMermaid() {
   
   const divsToRender = []
   
+  // 存储原始代码用于降级显示
+  const originalCodes = []
+  
   blocks.forEach((block, i) => {
-    const code = block.textContent
+    let code = block.textContent
+    originalCodes.push(code) // 保存原始代码
+    // 预处理 Mermaid 代码，修复中文问题
+    code = sanitizeMermaidCode(code)
+    
     const pre = block.parentElement
     
     const div = document.createElement('div')
     div.id = `mermaid-${Date.now()}-${i}`
     div.className = 'mermaid'
     div.textContent = code
+    div.dataset.originalCode = originalCodes[i] // 存储原始代码到元素上
     
     pre.replaceWith(div)
     divsToRender.push(div)
   })
   
-  try {
-    await mermaid.run({ nodes: divsToRender })
-    
-    divsToRender.forEach(div => {
+  // 逐个渲染，单个失败不影响其他图表
+  for (let i = 0; i < divsToRender.length; i++) {
+    const div = divsToRender[i]
+    try {
+      await mermaid.run({ nodes: [div] })
+      
       const svg = div.querySelector('svg')
       if (svg) {
         div.style.cursor = 'zoom-in'
@@ -86,10 +165,29 @@ async function renderMermaid() {
           emit('openModal', div.innerHTML)
         }
       }
-    })
-  } catch (e) {
-    console.error('Mermaid rendering failed:', e)
+    } catch (e) {
+      console.error(`Mermaid rendering failed for diagram ${i}:`, e)
+      // 渲染失败时显示降级内容
+      const errorDiv = document.createElement('div')
+      errorDiv.className = 'mermaid-error'
+      errorDiv.innerHTML = `
+        <div class="mermaid-error-header">⚠️ 图表渲染失败</div>
+        <details>
+          <summary>查看原始 Mermaid 代码</summary>
+          <pre class="mermaid-source"><code>${escapeHtml(div.dataset.originalCode || div.textContent)}</code></pre>
+        </details>
+        <div class="mermaid-error-tip">提示: 请检查代码语法，中文文本需用双引号包裹</div>
+      `
+      div.replaceWith(errorDiv)
+    }
   }
+}
+
+// HTML 转义函数
+function escapeHtml(text) {
+  const div = document.createElement('div')
+  div.textContent = text
+  return div.innerHTML
 }
 
 const emit = defineEmits(['openModal'])
@@ -235,5 +333,47 @@ ${processedHtml}
 
 .markdown-body :deep(.mermaid:hover) {
   box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+/* Mermaid 错误样式 */
+.markdown-body :deep(.mermaid-error) {
+  margin: 20px 0;
+  padding: 16px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+}
+
+.markdown-body :deep(.mermaid-error-header) {
+  color: #dc2626;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.markdown-body :deep(.mermaid-error details) {
+  margin: 8px 0;
+}
+
+.markdown-body :deep(.mermaid-error summary) {
+  cursor: pointer;
+  color: #4b5563;
+  font-size: 14px;
+}
+
+.markdown-body :deep(.mermaid-source) {
+  background: #1f2937;
+  color: #e5e7eb;
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.markdown-body :deep(.mermaid-error-tip) {
+  color: #6b7280;
+  font-size: 13px;
+  margin-top: 8px;
+  font-style: italic;
 }
 </style>

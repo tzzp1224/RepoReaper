@@ -540,6 +540,14 @@ async def _agent_stream_inner(
             - 展示高层组件 (如 Client, API Server, Database, Worker, External Service)。
             - 在连线上标注数据流 (如 "HTTP/JSON", "SQL")。
             - **风格**: 保持概念清晰简单。
+            - **重要**: 所有节点文本必须用双引号包裹，例如: `A["用户界面"] --> B["API服务"]`
+            - **示例**:
+            ```mermaid
+            graph TD
+                A["客户端"] -->|"HTTP请求"| B["API网关"]
+                B --> C["业务服务"]
+                C --> D[("数据库")]
+            ```
 
             ## 3. 核心逻辑分析 (Table)
             (总结关键模块，不要列出所有文件，只列最重要的)
@@ -560,6 +568,18 @@ async def _agent_stream_inner(
             选择**一个最重要**的业务流程 (Happy Path)。
             创建一个 `sequenceDiagram`。
             - 参与者应该是高层概念 (如 User, API, DB)，不要用具体变量名。
+            - **重要**: 参与者名称用英文，消息内容可以用中文但必须用双引号包裹。
+            - **示例**:
+            ```mermaid
+            sequenceDiagram
+                participant User as 用户
+                participant API as API服务
+                participant DB as 数据库
+                User->>API: "发起请求"
+                API->>DB: "查询数据"
+                DB-->>API: "返回结果"
+                API-->>User: "响应数据"
+            ```
             
             ## 6. 快速开始 (Quick Start)
             - **前置条件**: (如 Docker, Python 3.9+, .env 配置)
