@@ -7,7 +7,7 @@ venv/
 .DS_Store
 data/
 # Vue 构建输出
-frontend-dist/
+#frontend-dist/
 frontend-vue/node_modules/
 frontend-vue/dist/
 
@@ -26,3 +26,18 @@ logs/
 # 临时文件
 *.tmp
 *.bak
+QUICKSTART.md
+docs/INTERVIEW_QA.md
+docs/ROADMAP.md
+docs/TECHNICAL_REPORT.md
+evaluation/000_START_HERE.md
+evaluation/golden_dataset.json
+evaluation/HIGH_QUALITY_QUESTIONS.md
+
+evaluation/README_EVALUATION_SYSTEM.md
+evaluation/ragas_eval_dataset.json
+evaluation/sft_data/eval_results.jsonl
+evaluation/sft_data/negative_samples.jsonl
+evaluation/sft_data/positive_samples.jsonl
+evaluation/sft_data/skipped_samples.jsonl
+evaluation/sft_data/cleaned/rejected_20260128_010745.jsonl
