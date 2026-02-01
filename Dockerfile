@@ -1,46 +1,45 @@
 # 1. 基础镜像：选择 Python 3.10 的轻量版 (Slim)
-# 就像做菜先准备底料，我们使用官方提供的精简版 Linux + Python 环境
 FROM python:3.10-slim
 
 # 2. 设置环境变量
-# PYTHONDONTWRITEBYTECODE=1: 防止 Python 生成 .pyc 缓存文件 (Docker 里不需要)
-# PYTHONUNBUFFERED=1: 保证日志直接打印到控制台，不会被缓存 (方便调试)
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    # 默认 LLM 供应商 (可通过 docker run -e 覆盖)
+    LLM_PROVIDER=deepseek
 
 # 3. 设置工作目录
-# 相当于在容器内部执行了 "mkdir /app" 和 "cd /app"
 WORKDIR /app
 
 # 4. 安装系统级依赖
-# ChromaDB 有时需要编译工具，为了保险我们安装 build-essential
-# curl 用于健康检查 (Healthcheck)
-RUN apt-get update && apt-get install -y \
+# build-essential: ChromaDB 编译需要
+# curl: 健康检查
+# git: 某些 pip 包可能需要
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    git \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# 5. 复制依赖文件并安装
-# 技巧：先只复制 requirements.txt，这样如果代码变了但依赖没变，Docker 会利用缓存，跳过安装步骤，构建更快。
+# 5. 复制依赖文件并安装 (利用 Docker 层缓存)
 COPY requirements.txt .
 
-# 6. 执行安装命令
-# --no-cache-dir: 不缓存安装包，减小镜像体积
-RUN pip install --no-cache-dir -r requirements.txt
+# 6. 安装 Python 依赖
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# [针对 ChromaDB 的特殊补丁]
-# Linux 默认的 SQLite 版本可能过低导致 Chroma 崩溃，这里强制替换为 pysqlite3
-RUN pip install pysqlite3-binary && \
-    echo 'import sys; import pysqlite3; sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")' > /usr/local/lib/python3.10/site-packages/google_colab_workaround.py || true
-
-# 7. 复制项目所有代码到容器
-# 将当前目录下的所有文件（app, frontend, gunicorn_conf.py 等）复制到容器的 /app 目录
+# 7. 复制项目代码
 COPY . .
 
-# 8. 暴露端口
-# 告诉 Docker 这个容器会占用 8000 端口
+# 8. 创建数据目录 (Qdrant 本地存储 + 上下文缓存)
+RUN mkdir -p /app/data/qdrant_db /app/data/contexts
+
+# 9. 暴露端口
 EXPOSE 8000
 
-# 9. 启动命令
-# 使用 Gunicorn 启动，加载 gunicorn_conf.py 配置，运行 app.main:app
+# 10. 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# 11. 启动命令
 CMD ["gunicorn", "-c", "gunicorn_conf.py", "app.main:app"]
