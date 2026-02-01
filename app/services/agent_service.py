@@ -8,25 +8,13 @@ import httpx
 import time
 from typing import Set, Tuple, List
 from datetime import datetime
-from app.core.config import settings
+from app.core.config import settings, agent_config
 from app.utils.llm_client import client
 from app.services.github_service import get_repo_structure, get_file_content
 from app.services.vector_service import store_manager
 from app.services.chunking_service import UniversalChunker, ChunkingConfig
 from app.services.tracing_service import tracing_service
 from evaluation.evaluation_framework import EvaluationEngine, EvaluationResult, DataRoutingEngine
-
-# === 硬编码配置解耦 ===
-class AgentConfig:
-    INITIAL_MAP_LIMIT = 15
-    MAX_ROUNDS = 3
-    MAX_CONTEXT_LENGTH = 15000
-    LLM_TIMEOUT = 600
-    FILES_PER_ROUND = 3
-    MAX_SYMBOLS_PER_FILE = 30
-    # 扩展的优先级列表
-    PRIORITY_EXTS = ('.py', '.java', '.go', '.js', '.ts', '.tsx', '.cpp', '.cs', '.rs')
-    PRIORITY_KEYWORDS = ['main', 'app', 'core', 'api', 'service', 'utils', 'controller', 'model', 'config']
 
 # === Helper: 鲁棒的 JSON 提取 ===
 def extract_json_from_text(text):
@@ -106,7 +94,7 @@ def _extract_symbols_regex(content, ext):
         line = line.strip()
         # === 正则解析优化 (过滤更多干扰项) ===
         if not line or line.startswith(("//", "/*", "*", "#", "print", "console.")): continue
-        if count > AgentConfig.MAX_SYMBOLS_PER_FILE: break
+        if count > agent_config.max_symbols_per_file: break
 
         # 匹配类
         c_match = rules['class'].search(line)
@@ -128,7 +116,7 @@ def _extract_symbols_regex(content, ext):
 
     return symbols
 
-async def generate_repo_map(repo_url, file_list, limit=AgentConfig.INITIAL_MAP_LIMIT) -> Tuple[str, Set[str]]:
+async def generate_repo_map(repo_url, file_list, limit=agent_config.initial_map_limit) -> Tuple[str, Set[str]]:
     """
     生成增强版仓库地图 (多语言版)
     Returns:
@@ -138,8 +126,8 @@ async def generate_repo_map(repo_url, file_list, limit=AgentConfig.INITIAL_MAP_L
     # === 扩展高优先级文件列表 (使用配置) ===
     priority_files = [
         f for f in file_list 
-        if f.endswith(AgentConfig.PRIORITY_EXTS) and 
-        (f.count('/') <= 2 or any(k in f.lower() for k in AgentConfig.PRIORITY_KEYWORDS))
+        if f.endswith(agent_config.priority_exts) and 
+        (f.count('/') <= 2 or any(k in f.lower() for k in agent_config.priority_keywords))
     ]
     
     # 去重并截取
@@ -204,7 +192,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
         
         # === 接收 mapped_files 用于后续查重 + 计时 ===
         map_start = time.time()
-        file_tree_str, mapped_files = await generate_repo_map(repo_url, file_list, limit=AgentConfig.INITIAL_MAP_LIMIT)
+        file_tree_str, mapped_files = await generate_repo_map(repo_url, file_list, limit=agent_config.initial_map_limit)
         map_latency_ms = (time.time() - map_start) * 1000
         tracing_service.add_event("repo_map_generated", {"latency_ms": map_latency_ms, "files_mapped": len(mapped_files)})
         
@@ -212,8 +200,8 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
         context_summary = ""
         readme_file = next((f for f in file_list if f.lower().endswith("readme.md")), None)
 
-        for round_idx in range(AgentConfig.MAX_ROUNDS):
-            yield json.dumps({"step": "thinking", "message": f"🕵️ [Round {round_idx+1}/{AgentConfig.MAX_ROUNDS}] DeepSeek is analyzing Repo Map..."})
+        for round_idx in range(agent_config.max_rounds):
+            yield json.dumps({"step": "thinking", "message": f"🕵️ [Round {round_idx+1}/{agent_config.max_rounds}] DeepSeek is analyzing Repo Map..."})
             
             system_prompt = "You are a Senior Software Architect. Your goal is to understand the codebase."
             user_content = f"""
@@ -228,7 +216,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
             {context_summary}
             
             [Task]
-            Select 1-{AgentConfig.FILES_PER_ROUND} MOST CRITICAL files to read next to understand the core logic.
+            Select 1-{agent_config.files_per_round} MOST CRITICAL files to read next to understand the core logic.
             Focus on files that seem to contain main logic based on the Repo Map symbols.
             
             [Constraint]
@@ -251,7 +239,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
                 model=settings.default_model_name,
                 messages=plan_messages,
                 temperature=0.1,
-                timeout=AgentConfig.LLM_TIMEOUT 
+                timeout=settings.LLM_TIMEOUT 
             )
             
             llm_latency_ms = (time.time() - llm_start_time) * 1000
@@ -367,7 +355,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
                     mapped_files.add(res["path"])
             
             # === 硬编码截断解耦 ===
-            context_summary = context_summary[:AgentConfig.MAX_CONTEXT_LENGTH]
+            context_summary = context_summary[:agent_config.max_context_length]
             
             global_context_data = {
                 "file_tree": file_tree_str,
@@ -519,7 +507,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
             model=settings.default_model_name,
             messages=report_messages,
             stream=True,
-            timeout=AgentConfig.LLM_TIMEOUT  # 使用 Config
+            timeout=settings.LLM_TIMEOUT  # 使用统一配置
         )
         
         # === TTFT & Token Tracking ===
