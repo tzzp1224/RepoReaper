@@ -187,6 +187,9 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
     try:
         vector_db = store_manager.get_store(session_id)
         
+        # 调试日志：确认 session 隔离
+        print(f"🔍 [DEBUG] session_id: {session_id}, collection: {vector_db.collection_name}, context_file: {vector_db._context_file}")
+        
         # === regenerate_only 模式：跳过索引，直接生成报告 ===
         if regenerate_only:
             yield json.dumps({"step": "init", "message": f"🔄 [Session: {short_id}] Regenerating report in {language}..."})
@@ -198,9 +201,16 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
                 yield json.dumps({"step": "error", "message": "❌ No existing index found. Please analyze the repository first."})
                 return
             
-            file_tree_str = context.get("file_tree", "")
-            context_summary = context.get("summary", "")
+            # 正确读取 global_context 内的字段
+            global_ctx = context.get("global_context", {})
+            file_tree_str = global_ctx.get("file_tree", "")
+            context_summary = global_ctx.get("summary", "")
             visited_files = set()  # regenerate 模式不需要这个，但报告生成需要引用
+            
+            # 验证上下文与请求的仓库匹配
+            stored_repo_url = context.get("repo_url", "")
+            if stored_repo_url and repo_url not in stored_repo_url and stored_repo_url not in repo_url:
+                print(f"⚠️ [WARNING] repo_url mismatch! Request: {repo_url}, Stored: {stored_repo_url}")
             
             yield json.dumps({"step": "generating", "message": f"📝 Generating report in {'Chinese' if language == 'zh' else 'English'}..."})
         else:
