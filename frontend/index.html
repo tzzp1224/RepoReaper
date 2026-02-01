@@ -361,19 +361,58 @@
 
     const API_BASE = "";
     let fullReportMarkdown = "";
+    let currentSessionId = null;  // 基于仓库 URL 的 Session ID
+    let currentRepoUrl = "";      // 当前仓库 URL
 
-    // app/index.html 约 340 行
-    function getOrCreateSessionId() {
-        // === 必须修改为 sessionStorage ===
-        let sid = sessionStorage.getItem("rag_session_id");
-        if (!sid) {
-            sid = 'sess_' + Math.random().toString(36).substr(2, 9);
-            sessionStorage.setItem("rag_session_id", sid);
+    // === 基于仓库 URL 生成 Session ID ===
+    function generateRepoSessionId(repoUrl) {
+        // 标准化 URL
+        let normalized = repoUrl.trim().toLowerCase();
+        // 移除 .git 后缀
+        if (normalized.endsWith('.git')) {
+            normalized = normalized.slice(0, -4);
         }
-        return sid;
+        // 提取 owner/repo
+        const match = normalized.match(/github\.com[\/:]([^\/]+)\/([^\/\?#]+)/);
+        if (!match) return null;
+        
+        const owner = match[1];
+        const repo = match[2];
+        
+        // 生成简单 hash
+        const hashInput = `https://github.com/${owner}/${repo}`;
+        let hash = 0;
+        for (let i = 0; i < hashInput.length; i++) {
+            const char = hashInput.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash;
+        }
+        const shortHash = Math.abs(hash).toString(16).substring(0, 8);
+        
+        return `repo_${shortHash}_${owner.substring(0, 10)}_${repo.substring(0, 15)}`;
     }
-    const SESSION_ID = getOrCreateSessionId();
-    document.getElementById('sessionIdDisplay').innerText = SESSION_ID.substr(-6);
+
+    // === 检查仓库是否已分析（包含语言参数）===
+    async function checkRepoSession(repoUrl, language = 'en') {
+        try {
+            const response = await fetch(`${API_BASE}/api/repo/check`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: repoUrl, language: language })
+            });
+            return await response.json();
+        } catch (e) {
+            console.error("Check repo session failed:", e);
+            return { exists: false, has_index: false, available_languages: [] };
+        }
+    }
+
+    // 更新 Session 显示
+    function updateSessionDisplay(sessionId) {
+        if (sessionId) {
+            document.getElementById('sessionIdDisplay').innerText = sessionId.substring(sessionId.length - 8);
+        }
+    }
 
     // 拖拽逻辑
     const resizer = document.getElementById('resizer');
@@ -486,29 +525,66 @@
     }
 
     // 业务逻辑
-    function startAnalysis() {
+    async function startAnalysis() {
         const url = document.getElementById('repoUrl').value.trim();
         if (!url) { alert("Please Enter URL"); return; }
         
-        // === [修改] 获取选中的语言选项 ===
+        // === 获取选中的语言选项 ===
         const lang = document.querySelector('input[name="lang"]:checked').value;
-        // ============================
 
         const logDiv = document.getElementById('logs');
         const reportDiv = document.getElementById('report');
         const btnAnalyze = document.getElementById('btn-analyze');
         
-        // 增加语言显示
-        logDiv.innerHTML = `<div>[System] 🚀 Initialize Agent (Session: ${SESSION_ID.substr(-6)}, Lang: ${lang.toUpperCase()})...</div>`;
+        // === 检查是否已有分析结果 ===
+        logDiv.innerHTML = `<div>[System] 🔍 Checking existing analysis (${lang.toUpperCase()})...</div>`;
+        btnAnalyze.disabled = true;
+        btnAnalyze.textContent = "Checking...";
+        
+        const checkResult = await checkRepoSession(url, lang);
+        currentSessionId = checkResult.session_id;
+        currentRepoUrl = url;
+        updateSessionDisplay(currentSessionId);
+        
+        if (checkResult.exists && checkResult.report) {
+            // === 已有该语言的分析结果，直接加载 ===
+            logDiv.innerHTML = `<div>[System] ✅ Found existing ${lang.toUpperCase()} analysis! Loading...</div>`;
+            fullReportMarkdown = checkResult.report;
+            reportDiv.innerHTML = marked.parse(fullReportMarkdown);
+            
+            // 渲染图表
+            await renderMermaidDiagrams(reportDiv);
+            
+            logAppend(`📦 Loaded ${lang.toUpperCase()} report from cache (Session: ${currentSessionId.substring(currentSessionId.length - 8)})`, "#15803d");
+            btnAnalyze.disabled = false;
+            btnAnalyze.textContent = "Reanalysis";
+            toggleChat(true);
+            addMsg("ai", "🎉 Previous analysis loaded! You can continue asking questions.");
+            return;
+        }
+        
+        // === 判断是否可以复用索引 ===
+        let regenerateOnly = false;
+        if (checkResult.has_index && !checkResult.report) {
+            const availableLangs = checkResult.available_languages || [];
+            if (availableLangs.length > 0) {
+                logDiv.innerHTML = `<div>[System] 📚 Index exists. Available reports: [${availableLangs.join(', ')}]. Generating ${lang.toUpperCase()} report...</div>`;
+                logAppend(`💡 Reusing existing code index, only generating ${lang.toUpperCase()} report`, "#0ea5e9");
+                regenerateOnly = true;  // 复用索引，仅生成报告
+            }
+        }
+        
+        // === 开始分析 ===
+        if (!regenerateOnly) {
+            logDiv.innerHTML = `<div>[System] 🚀 Initialize Agent (Session: ${currentSessionId.substring(currentSessionId.length - 8)}, Lang: ${lang.toUpperCase()})...</div>`;
+        }
         reportDiv.innerHTML = "<div style='color:#94a3b8; text-align:center; margin-top:40px'>⏳ Analyzing the code architecture in depth...</div>";
         fullReportMarkdown = "";
         
-        btnAnalyze.disabled = true;
         btnAnalyze.textContent = "Analyzing...";
         toggleChat(false);
 
-        // === [修改] 在 URL 中带上 language 参数 ===
-        const eventSource = new EventSource(`${API_BASE}/analyze?url=${encodeURIComponent(url)}&session_id=${SESSION_ID}&language=${lang}`);
+        const eventSource = new EventSource(`${API_BASE}/analyze?url=${encodeURIComponent(url)}&session_id=${currentSessionId}&language=${lang}&regenerate_only=${regenerateOnly}`);
         
         eventSource.onmessage = function(event) {
             const data = JSON.parse(event.data);
@@ -603,11 +679,18 @@
         // 获取当前仓库 URL（用于评估）
         const repoUrl = document.getElementById('repoUrl').value.trim();
         
+        // 确保有有效的 Session ID
+        if (!currentSessionId) {
+            updateMsg(msgId, "❌ Please analyze a repository first.");
+            setChatButtonState(false);
+            return;
+        }
+        
         try {
             const res = await fetch(`${API_BASE}/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ query: query, session_id: SESSION_ID, repo_url: repoUrl }),
+                body: JSON.stringify({ query: query, session_id: currentSessionId, repo_url: repoUrl }),
                 signal: chatAbortController.signal
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
