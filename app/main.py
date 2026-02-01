@@ -2,8 +2,6 @@
 import sys
 import io
 import os
-import time
-import shutil
 import asyncio
 from contextlib import asynccontextmanager
 
@@ -13,14 +11,14 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from app.core.config import settings
 from app.services.agent_service import agent_stream
 from app.services.chat_service import process_chat_stream, get_eval_data, clear_eval_data
-from app.services.vector_service import vector_config, CHROMA_DIR, CONTEXT_DIR
+from app.services.vector_service import store_manager
 from app.services.auto_evaluation_service import (
     init_auto_evaluation_service,
     get_auto_evaluation_service,
@@ -32,50 +30,33 @@ import uuid
 
 settings.validate()
 
-# === 后台清理任务 ===
-async def cleanup_cron_job():
-    """
-    后台任务：每小时运行一次。
-    删除 Context 目录下超过 24 小时的 JSON 文件。
-    """
-    while True:
-        try:
-            print(f"🧹 [System] Starting scheduled data cleanup in {vector_config.DATA_DIR}...")
-            now = time.time()
-            cutoff = 24 * 3600  # 24小时
-            
-            # 1. 清理 JSON Context 文件
-            if os.path.exists(CONTEXT_DIR):
-                for filename in os.listdir(CONTEXT_DIR):
-                    filepath = os.path.join(CONTEXT_DIR, filename)
-                    # 检查最后修改时间
-                    if os.path.isfile(filepath) and (now - os.path.getmtime(filepath)) > cutoff:
-                        try:
-                            os.remove(filepath)
-                            print(f"   - Deleted old context: {filename}")
-                        except OSError as e:
-                            print(f"   - Error deleting {filename}: {e}")
-
-            # 2. ChromaDB 清理策略 (仅占位，通常不建议暴力删除)
-            if os.path.exists(CHROMA_DIR):
-                 pass 
-            
-        except Exception as e:
-            print(f"⚠️ Cleanup Task Error: {e}")
-        
-        await asyncio.sleep(3600) # 等待 1 小时
-
 # === 生命周期管理 ===
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
+    from app.services.vector_service import store_manager
+    
     # 启动时运行
-    task = asyncio.create_task(cleanup_cron_job())
+    print("🚀 Application starting...")
+    # 仓库数据永久存储，对话记忆纯内存存储（重启自动清空）
+    
     yield
+    
     # 关闭时运行
-    task.cancel()
+    print("🛑 Application shutting down...")
+    
     # 清理 GitHub 客户端连接
     from app.utils.github_client import close_github_client
     await close_github_client()
+    
+    # 清理向量存储连接
+    await store_manager.close_all()
+    
+    # 关闭共享的 Qdrant 客户端
+    from app.storage.qdrant_store import close_shared_client
+    await close_shared_client()
+    
+    print("✅ Cleanup complete")
 
 app = FastAPI(title="GitHub RAG Agent", lifespan=lifespan)
 
@@ -123,11 +104,98 @@ async def read_root():
 def health_check():
     return {"status": "ok"}
 
+@app.get("/api/sessions")
+async def get_sessions():
+    """获取 session 管理状态"""
+    return JSONResponse(store_manager.get_stats())
+
+@app.post("/api/sessions/cleanup")
+async def trigger_cleanup():
+    """手动触发过期文件清理"""
+    stats = await store_manager.cleanup_expired_files()
+    return JSONResponse({"message": "Cleanup completed", "stats": stats})
+
+@app.delete("/api/sessions/{session_id}")
+async def close_session(session_id: str):
+    """关闭指定 session"""
+    await store_manager.close_session(session_id)
+    return JSONResponse({"message": f"Session {session_id} closed"})
+
+
+# === 仓库级 Session API ===
+
+@app.post("/api/repo/check")
+async def check_repo_session(request: Request):
+    """
+    检查仓库是否已有指定语言的索引和报告
+    
+    请求: { "url": "https://github.com/owner/repo", "language": "zh" }
+    响应: { 
+        "exists": true/false, 
+        "session_id": "repo_xxx",
+        "report": "..." (如果存在对应语言的报告),
+        "has_index": true/false,
+        "available_languages": ["en", "zh"]
+    }
+    """
+    from app.utils.session import generate_repo_session_id
+    
+    data = await request.json()
+    repo_url = data.get("url", "").strip()
+    language = data.get("language", "en")
+    
+    if not repo_url:
+        return JSONResponse({"error": "Missing URL"}, status_code=400)
+    
+    # 生成基于仓库的 Session ID
+    session_id = generate_repo_session_id(repo_url)
+    
+    # 检查是否存在
+    store = store_manager.get_store(session_id)
+    
+    # 尝试加载上下文
+    context = store.load_context()
+    
+    if context and context.get("repo_url"):
+        # 存在已分析的仓库
+        # 获取指定语言的报告
+        report = store.get_report(language)
+        available_languages = store.get_available_languages()
+        global_context = context.get("global_context", {})
+        has_index = bool(global_context.get("file_tree"))
+        
+        return JSONResponse({
+            "exists": True,
+            "session_id": session_id,
+            "repo_url": context.get("repo_url"),
+            "report": report,  # 指定语言的报告，可能为 None
+            "has_index": has_index,
+            "available_languages": available_languages,
+            "requested_language": language,
+        })
+    else:
+        return JSONResponse({
+            "exists": False,
+            "session_id": session_id,
+            "has_index": False,
+            "available_languages": [],
+        })
+
+
 @app.get("/analyze")
-async def analyze(url: str, session_id: str, language: str = "en"): 
+async def analyze(url: str, session_id: str, language: str = "en", regenerate_only: bool = False): 
+    """
+    仓库分析端点
+    
+    Args:
+        url: 仓库 URL
+        session_id: Session ID
+        language: 报告语言 ("en" 或 "zh")
+        regenerate_only: True 时跳过抓取/索引，直接使用已有索引生成新语言报告
+    """
     if not session_id:
         return {"error": "Missing session_id"}
-    return EventSourceResponse(agent_stream(url, session_id, language))
+    return EventSourceResponse(agent_stream(url, session_id, language, regenerate_only))
 
 @app.post("/chat")
 async def chat(request: Request):
