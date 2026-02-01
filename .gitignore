@@ -6,3 +6,23 @@ __pycache__/
 venv/
 .DS_Store
 data/
+# Vue 构建输出
+frontend-dist/
+frontend-vue/node_modules/
+frontend-vue/dist/
+
+# 锁文件目录
+data/locks/
+
+# 日志
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 临时文件
+*.tmp
+*.bak

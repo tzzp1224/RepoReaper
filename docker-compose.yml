@@ -1,0 +1,86 @@
+# Docker Compose 配置 - 生产环境部署
+# 包含: FastAPI 应用 + Qdrant Server
+
+version: '3.8'
+
+services:
+  # ============================================================
+  # Qdrant 向量数据库
+  # ============================================================
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: github-rag-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"  # REST API
+      - "6334:6334"  # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================================
+  # FastAPI 应用
+  # ============================================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: github-rag-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Qdrant Server 模式
+      - QDRANT_MODE=server
+      - QDRANT_URL=http://qdrant:6333
+      
+      # 文件锁 (多 Worker)
+      - LOCK_BACKEND=file
+      - LOCK_DIR=/app/data/locks
+      
+      # LLM 配置 (从 .env 读取)
+      - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - SILICON_API_KEY=${SILICON_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+    volumes:
+      - app_data:/app/data
+      - app_logs:/app/logs
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  qdrant_data:
+    driver: local
+  app_data:
+    driver: local
+  app_logs:
+    driver: local
+
+# ============================================================
+# 使用说明
+# ============================================================
+# 1. 复制 .env.example 为 .env 并配置 API Keys
+# 2. 启动服务: docker-compose up -d
+# 3. 查看日志: docker-compose logs -f app
+# 4. 停止服务: docker-compose down
+# 
+# 扩展到多 Worker:
+# 修改 Dockerfile 中的 gunicorn workers 数量，或使用:
+# docker-compose up -d --scale app=3
+# 配合 Nginx/Traefik 做负载均衡
