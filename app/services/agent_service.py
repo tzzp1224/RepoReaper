@@ -164,209 +164,239 @@ async def generate_repo_map(repo_url, file_list, limit=agent_config.initial_map_
     return "\n".join(repo_map_lines), mapped_files_set
 
 
-async def agent_stream(repo_url: str, session_id: str, language: str = "en"):
+async def agent_stream(repo_url: str, session_id: str, language: str = "en", regenerate_only: bool = False):
+    """
+    主分析流程。
+    
+    Args:
+        repo_url: GitHub 仓库 URL
+        session_id: 会话 ID
+        language: 报告语言 (zh/en)
+        regenerate_only: 如果为 True，跳过索引步骤，直接使用已有数据生成新语言报告
+    """
     short_id = session_id[-6:] if session_id else "unknown"
     
     # === 追踪初始化 ===
     trace_id = tracing_service.start_trace(
         trace_name="agent_analysis",
         session_id=session_id,
-        metadata={"repo_url": repo_url, "language": language}
+        metadata={"repo_url": repo_url, "language": language, "regenerate_only": regenerate_only}
     )
     start_time = time.time()
     
-    yield json.dumps({"step": "init", "message": f"🚀 [Session: {short_id}] Connecting to GitHub..."})
-    await asyncio.sleep(0.5)
-    
     try:
         vector_db = store_manager.get_store(session_id)
-        vector_db.reset_collection() 
         
-        chunker = UniversalChunker(config=ChunkingConfig(min_chunk_size=50))
+        # === regenerate_only 模式：跳过索引，直接生成报告 ===
+        if regenerate_only:
+            yield json.dumps({"step": "init", "message": f"🔄 [Session: {short_id}] Regenerating report in {language}..."})
+            await asyncio.sleep(0.3)
+            
+            # 从已有索引加载上下文
+            context = vector_db.load_context()
+            if not context:
+                yield json.dumps({"step": "error", "message": "❌ No existing index found. Please analyze the repository first."})
+                return
+            
+            file_tree_str = context.get("file_tree", "")
+            context_summary = context.get("summary", "")
+            visited_files = set()  # regenerate 模式不需要这个，但报告生成需要引用
+            
+            yield json.dumps({"step": "generating", "message": f"📝 Generating report in {'Chinese' if language == 'zh' else 'English'}..."})
+        else:
+            # === 正常分析模式 ===
+            yield json.dumps({"step": "init", "message": f"🚀 [Session: {short_id}] Connecting to GitHub..."})
+            await asyncio.sleep(0.5)
+            
+            vector_db.reset_collection() 
+            
+            chunker = UniversalChunker(config=ChunkingConfig(min_chunk_size=50))
 
-        file_list = await get_repo_structure(repo_url)
-        if not file_list:
-            raise Exception("Repository is empty or unreadable.")
+            file_list = await get_repo_structure(repo_url)
+            if not file_list:
+                raise Exception("Repository is empty or unreadable.")
 
-        yield json.dumps({"step": "fetched", "message": f"📦 Found {len(file_list)} files. Building Repo Map (AST Parsing)..."})        
-        
-        # === 接收 mapped_files 用于后续查重 + 计时 ===
-        map_start = time.time()
-        file_tree_str, mapped_files = await generate_repo_map(repo_url, file_list, limit=agent_config.initial_map_limit)
-        map_latency_ms = (time.time() - map_start) * 1000
-        tracing_service.add_event("repo_map_generated", {"latency_ms": map_latency_ms, "files_mapped": len(mapped_files)})
-        
-        visited_files = set()
-        context_summary = ""
-        readme_file = next((f for f in file_list if f.lower().endswith("readme.md")), None)
+            yield json.dumps({"step": "fetched", "message": f"📦 Found {len(file_list)} files. Building Repo Map (AST Parsing)..."})        
+            
+            # === 接收 mapped_files 用于后续查重 + 计时 ===
+            map_start = time.time()
+            file_tree_str, mapped_files = await generate_repo_map(repo_url, file_list, limit=agent_config.initial_map_limit)
+            map_latency_ms = (time.time() - map_start) * 1000
+            tracing_service.add_event("repo_map_generated", {"latency_ms": map_latency_ms, "files_mapped": len(mapped_files)})
+            
+            visited_files = set()
+            context_summary = ""
+            readme_file = next((f for f in file_list if f.lower().endswith("readme.md")), None)
 
-        for round_idx in range(agent_config.max_rounds):
-            yield json.dumps({"step": "thinking", "message": f"🕵️ [Round {round_idx+1}/{agent_config.max_rounds}] DeepSeek is analyzing Repo Map..."})
-            
-            system_prompt = "You are a Senior Software Architect. Your goal is to understand the codebase."
-            user_content = f"""
-            [Project Repo Map]
-            (Contains file paths and key Class/Function signatures)
-            {file_tree_str}
-            
-            [Files Already Read]
-            {list(visited_files)}
-            
-            [Current Knowledge]
-            {context_summary}
-            
-            [Task]
-            Select 1-{agent_config.files_per_round} MOST CRITICAL files to read next to understand the core logic.
-            Focus on files that seem to contain main logic based on the Repo Map symbols.
-            
-            [Constraint]
-            Return ONLY a raw JSON list of strings. No markdown.
-            Example: ["src/main.py", "app/auth.py"]
-            """
-            
-            if not client:
-                 yield json.dumps({"step": "error", "message": "❌ LLM Client Not Initialized."})
-                 return
-            
-            # === Token & Latency Tracing ===
-            llm_start_time = time.time()
-            plan_messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ]
-            
-            response = await client.chat.completions.create(
-                model=settings.default_model_name,
-                messages=plan_messages,
-                temperature=0.1,
-                timeout=settings.LLM_TIMEOUT 
-            )
-            
-            llm_latency_ms = (time.time() - llm_start_time) * 1000
-            raw_content = response.choices[0].message.content
-            
-            # 记录 Token 使用量
-            usage = getattr(response, 'usage', None)
-            tracing_service.record_llm_generation(
-                model=settings.default_model_name,
-                prompt_messages=plan_messages,
-                generated_text=raw_content,
-                total_latency_ms=llm_latency_ms,
-                prompt_tokens=usage.prompt_tokens if usage else None,
-                completion_tokens=usage.completion_tokens if usage else None,
-                total_tokens=usage.total_tokens if usage else None,
-                is_streaming=False,
-                metadata={"step": "file_selection", "round": round_idx + 1}
-            )
-            target_files = extract_json_from_text(raw_content)
+            for round_idx in range(agent_config.max_rounds):
+                yield json.dumps({"step": "thinking", "message": f"🕵️ [Round {round_idx+1}/{agent_config.max_rounds}] DeepSeek is analyzing Repo Map..."})
+                
+                system_prompt = "You are a Senior Software Architect. Your goal is to understand the codebase."
+                user_content = f"""
+                [Project Repo Map]
+                (Contains file paths and key Class/Function signatures)
+                {file_tree_str}
+                
+                [Files Already Read]
+                {list(visited_files)}
+                
+                [Current Knowledge]
+                {context_summary}
+                
+                [Task]
+                Select 1-{agent_config.files_per_round} MOST CRITICAL files to read next to understand the core logic.
+                Focus on files that seem to contain main logic based on the Repo Map symbols.
+                
+                [Constraint]
+                Return ONLY a raw JSON list of strings. No markdown.
+                Example: ["src/main.py", "app/auth.py"]
+                """
+                
+                if not client:
+                     yield json.dumps({"step": "error", "message": "❌ LLM Client Not Initialized."})
+                     return
+                
+                # === Token & Latency Tracing ===
+                llm_start_time = time.time()
+                plan_messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ]
+                
+                response = await client.chat.completions.create(
+                    model=settings.default_model_name,
+                    messages=plan_messages,
+                    temperature=0.1,
+                    timeout=settings.LLM_TIMEOUT 
+                )
+                
+                llm_latency_ms = (time.time() - llm_start_time) * 1000
+                raw_content = response.choices[0].message.content
+                
+                # 记录 Token 使用量
+                usage = getattr(response, 'usage', None)
+                tracing_service.record_llm_generation(
+                    model=settings.default_model_name,
+                    prompt_messages=plan_messages,
+                    generated_text=raw_content,
+                    total_latency_ms=llm_latency_ms,
+                    prompt_tokens=usage.prompt_tokens if usage else None,
+                    completion_tokens=usage.completion_tokens if usage else None,
+                    total_tokens=usage.total_tokens if usage else None,
+                    is_streaming=False,
+                    metadata={"step": "file_selection", "round": round_idx + 1}
+                )
+                target_files = extract_json_from_text(raw_content)
 
-            valid_files = [f for f in target_files if f in file_list and f not in visited_files]
+                valid_files = [f for f in target_files if f in file_list and f not in visited_files]
 
-            if round_idx == 0 and readme_file and readme_file not in visited_files and readme_file not in valid_files:
-                valid_files.insert(0, readme_file)
+                if round_idx == 0 and readme_file and readme_file not in visited_files and readme_file not in valid_files:
+                    valid_files.insert(0, readme_file)
 
-            if not valid_files:
-                yield json.dumps({"step": "plan", "message": f"🛑 [Round {round_idx+1}] Sufficient context gathered."})
-                break
-            
-            yield json.dumps({"step": "plan", "message": f"👉 [Round {round_idx+1}] Selected: {valid_files}"})
-            
-            # === 并发模型缺陷优化 (并行下载处理) ===
-            async def process_single_file(file_path):
-                try:
-                    file_start = time.time()
-                    
-                    # 🔧 异步 GitHub API (已优化为非阻塞)
-                    content = await get_file_content(repo_url, file_path)
-                    if not content: 
-                        tracing_service.add_event("file_read_failed", {"file": file_path})
+                if not valid_files:
+                    yield json.dumps({"step": "plan", "message": f"🛑 [Round {round_idx+1}] Sufficient context gathered."})
+                    break
+                
+                yield json.dumps({"step": "plan", "message": f"👉 [Round {round_idx+1}] Selected: {valid_files}"})
+                
+                # === 并发模型缺陷优化 (并行下载处理) ===
+                async def process_single_file(file_path):
+                    try:
+                        file_start = time.time()
+                        
+                        # 🔧 异步 GitHub API (已优化为非阻塞)
+                        content = await get_file_content(repo_url, file_path)
+                        if not content: 
+                            tracing_service.add_event("file_read_failed", {"file": file_path})
+                            return None
+
+                        # 1. 摘要与 Context
+                        lines = content.split('\n')[:50]
+                        preview = "\n".join(lines)
+                        file_knowledge = f"\n--- File: {file_path} ---\n{preview}\n"
+                        
+                        # 2. Repo Map 增量更新与查重
+                        new_map_entry = None
+                        if file_path not in mapped_files:
+                            symbols = await asyncio.to_thread(_extract_symbols, content, file_path)
+                            if symbols:
+                                new_map_entry = f"{file_path}\n" + "\n".join(symbols)
+
+                        # 3. 切片与入库
+                        chunks = await asyncio.to_thread(chunker.chunk_file, content, file_path)
+                        if chunks:
+                            documents = [c["content"] for c in chunks]
+                            metadatas = []
+                            for c in chunks:
+                                meta = c["metadata"]
+                                metadatas.append({
+                                    "file": meta["file"],
+                                    "type": meta["type"],
+                                    "name": meta.get("name", ""),
+                                    "class": meta.get("class") or ""
+                                })
+                            if documents:
+                                try:
+                                    await vector_db.add_documents(documents, metadatas)
+                                except Exception as e:
+                                    print(f"❌ 索引错误 {file_path}: {e}")
+                                    # 不中断，继续处理其他文件
+                                    return None
+                        
+                        file_latency_ms = (time.time() - file_start) * 1000
+                        tracing_service.add_event("file_processed", {
+                            "file": file_path,
+                            "latency_ms": file_latency_ms,
+                            "chunks_count": len(chunks) if chunks else 0
+                        })
+
+                        return {
+                            "path": file_path,
+                            "knowledge": file_knowledge,
+                            "map_entry": new_map_entry
+                        }
+                    except Exception as e:
+                        print(f"❌ 处理文件错误 {file_path}: {e}")
                         return None
 
-                    # 1. 摘要与 Context
-                    lines = content.split('\n')[:50]
-                    preview = "\n".join(lines)
-                    file_knowledge = f"\n--- File: {file_path} ---\n{preview}\n"
+                # 提示开始并发下载
+                yield json.dumps({"step": "download", "message": f"📥 Starting parallel download for {len(valid_files)} files..."})
+
+                # 启动并发任务 (return_exceptions=True 防止单个失败导致整个中断)
+                tasks = [process_single_file(f) for f in valid_files]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                # 聚合结果
+                download_count = 0
+                for res in results:
+                    if not res or isinstance(res, Exception): 
+                        if isinstance(res, Exception):
+                            print(f"❌ Task 异常: {res}")
+                        continue
+                    download_count += 1
+                    visited_files.add(res["path"])
+                    context_summary += res["knowledge"]
                     
-                    # 2. Repo Map 增量更新与查重
-                    new_map_entry = None
-                    if file_path not in mapped_files:
-                        symbols = await asyncio.to_thread(_extract_symbols, content, file_path)
-                        if symbols:
-                            new_map_entry = f"{file_path}\n" + "\n".join(symbols)
-
-                    # 3. 切片与入库
-                    chunks = await asyncio.to_thread(chunker.chunk_file, content, file_path)
-                    if chunks:
-                        documents = [c["content"] for c in chunks]
-                        metadatas = []
-                        for c in chunks:
-                            meta = c["metadata"]
-                            metadatas.append({
-                                "file": meta["file"],
-                                "type": meta["type"],
-                                "name": meta.get("name", ""),
-                                "class": meta.get("class") or ""
-                            })
-                        if documents:
-                            try:
-                                await vector_db.add_documents(documents, metadatas)
-                            except Exception as e:
-                                print(f"❌ 索引错误 {file_path}: {e}")
-                                # 不中断，继续处理其他文件
-                                return None
-                    
-                    file_latency_ms = (time.time() - file_start) * 1000
-                    tracing_service.add_event("file_processed", {
-                        "file": file_path,
-                        "latency_ms": file_latency_ms,
-                        "chunks_count": len(chunks) if chunks else 0
-                    })
-
-                    return {
-                        "path": file_path,
-                        "knowledge": file_knowledge,
-                        "map_entry": new_map_entry
-                    }
-                except Exception as e:
-                    print(f"❌ 处理文件错误 {file_path}: {e}")
-                    return None
-
-            # 提示开始并发下载
-            yield json.dumps({"step": "download", "message": f"📥 Starting parallel download for {len(valid_files)} files..."})
-
-            # 启动并发任务 (return_exceptions=True 防止单个失败导致整个中断)
-            tasks = [process_single_file(f) for f in valid_files]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # 聚合结果
-            download_count = 0
-            for res in results:
-                if not res or isinstance(res, Exception): 
-                    if isinstance(res, Exception):
-                        print(f"❌ Task 异常: {res}")
-                    continue
-                download_count += 1
-                visited_files.add(res["path"])
-                context_summary += res["knowledge"]
+                    # 增量更新 Map
+                    if res["map_entry"]:
+                        file_tree_str = f"{res['map_entry']}\n\n{file_tree_str}"
+                        mapped_files.add(res["path"])
                 
-                # 增量更新 Map
-                if res["map_entry"]:
-                    file_tree_str = f"{res['map_entry']}\n\n{file_tree_str}"
-                    mapped_files.add(res["path"])
-            
-            # === 硬编码截断解耦 ===
-            context_summary = context_summary[:agent_config.max_context_length]
-            
-            global_context_data = {
-                "file_tree": file_tree_str,
-                "summary": context_summary[:8000]
-            }
-            vector_db.save_context(repo_url, global_context_data)
-            
-            yield json.dumps({"step": "indexing", "message": f"🧠 [Round {round_idx+1}] Processed {download_count} files. Knowledge graph updated."})
+                # === 硬编码截断解耦 ===
+                context_summary = context_summary[:agent_config.max_context_length]
+                
+                global_context_data = {
+                    "file_tree": file_tree_str,
+                    "summary": context_summary[:8000]
+                }
+                vector_db.save_context(repo_url, global_context_data)
+                
+                yield json.dumps({"step": "indexing", "message": f"🧠 [Round {round_idx+1}] Processed {download_count} files. Knowledge graph updated."})
 
-        # Final Report
-        yield json.dumps({"step": "generating", "message": "📝 Generating technical report..."})
+            # Final Report (正常分析模式下的提示)
+            yield json.dumps({"step": "generating", "message": "📝 Generating technical report..."})
+        
+        # === 报告生成 (两种模式共用) ===
         
 
         repo_map_injection = f"""
