@@ -581,6 +581,9 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
             is_streaming=True,
             metadata={"step": "report_generation", "generated_chars": len(generated_text)}
         )
+        
+        # === 保存报告 (按语言存储) ===
+        vector_db.save_report(generated_text, language)
 
         yield json.dumps({"step": "finish", "message": "✅ Analysis Complete!"})
 
