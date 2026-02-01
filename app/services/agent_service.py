@@ -430,7 +430,7 @@ async def _agent_stream_inner(
                     "file_tree": file_tree_str,
                     "summary": context_summary[:8000]
                 }
-                await vector_db.save_context_async(repo_url, global_context_data)
+                await vector_db.save_context(repo_url, global_context_data)
                 
                 yield json.dumps({"step": "indexing", "message": f"🧠 [Round {round_idx+1}] Processed {download_count} files. Knowledge graph updated."})
 
@@ -685,7 +685,7 @@ async def _agent_stream_inner(
         )
         
         # === 保存报告 (按语言存储，异步避免阻塞) ===
-        await vector_db.save_report_async(generated_text, language)
+        await vector_db.save_report(generated_text, language)
 
         yield json.dumps({"step": "finish", "message": "✅ Analysis Complete!"})
 
