@@ -4,10 +4,9 @@ import multiprocessing
 # 监听地址
 bind = "0.0.0.0:8000"
 
-# Worker 数量：推荐为 CPU 核心数 * 2 + 1
-# 对于 Demo 或小机器，设置 2-4 个即可，太多了 ChromaDB 并发写可能有锁竞争
-# 部署到轻量级云服务器时设为2
-workers = 2
+# Worker 数量：Qdrant 本地模式不支持多进程并发访问，必须设为 1
+# 如需多 worker，请使用 Qdrant Server 模式
+workers = 1
 
 # Worker 类：FastAPI 需要使用 uvicorn
 worker_class = "uvicorn.workers.UvicornWorker"
