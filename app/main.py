@@ -94,9 +94,20 @@ app.add_middleware(
 # === 静态文件与前端 ===
 app.mount("/static", StaticFiles(directory="app"), name="static")
 
+# Vue 3 构建输出的静态资源 (JS/CSS/assets)
+import os
+FRONTEND_DIST = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend-dist")
+if os.path.exists(FRONTEND_DIST):
+    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="vue-assets")
+
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
-    # 确保 index.html 路径正确
+    # 优先使用 Vue 3 构建版本，否则回退到原版
+    vue_index = os.path.join(FRONTEND_DIST, "index.html")
+    if os.path.exists(vue_index):
+        with open(vue_index, "r", encoding="utf-8") as f:
+            return f.read()
+    # 回退到原版前端
     with open("frontend/index.html", "r", encoding="utf-8") as f:
         return f.read()
 
