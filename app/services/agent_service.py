@@ -538,15 +538,24 @@ async def _agent_stream_inner(
             ## 2. 系统架构 (Mermaid)
             创建一个 `graph TD` 图。
             - 展示高层组件 (如 Client, API Server, Database, Worker, External Service)。
-            - 在连线上标注数据流 (如 "HTTP/JSON", "SQL")。
-            - **风格**: 保持概念清晰简单。
-            - **重要**: 所有节点文本必须用双引号包裹，例如: `A["用户界面"] --> B["API服务"]`
-            - **示例**:
+            - 在连线上标注数据流 (如 "HTTP", "SQL")。
+            - **风格**: 保持概念清晰简单，节点数量控制在 8 个以内。
+            
+            **⚠️ Mermaid 语法严格要求 (v10.x)**:
+            1. **所有节点文本必须用双引号包裹**: `A["用户界面"]` ✓, `A[用户界面]` ✗
+            2. **所有连线标签必须用双引号包裹**: `-->|"HTTP请求"|` ✓, `-->|HTTP请求|` ✗
+            3. **禁止使用特殊字符**: 不要在文本中使用 `<br/>`, `/`, `(`, `)`, `&`, `<`, `>` 等
+            4. **使用简短英文ID**: 节点ID用简短英文如 `A`, `B`, `Client`, `API`
+            5. **subgraph 标题也需引号**: `subgraph "核心服务"` ✓
+            6. **数据库节点**: 使用 `[("数据库")]` 格式
+            
+            - **正确示例**:
             ```mermaid
             graph TD
-                A["客户端"] -->|"HTTP请求"| B["API网关"]
-                B --> C["业务服务"]
-                C --> D[("数据库")]
+                Client["客户端"] -->|"HTTP请求"| API["API网关"]
+                API --> Service["业务服务"]
+                Service --> DB[("数据库")]
+                Service -->|"调用"| External["外部服务"]
             ```
 
             ## 3. 核心逻辑分析 (Table)
@@ -568,13 +577,18 @@ async def _agent_stream_inner(
             选择**一个最重要**的业务流程 (Happy Path)。
             创建一个 `sequenceDiagram`。
             - 参与者应该是高层概念 (如 User, API, DB)，不要用具体变量名。
-            - **重要**: 参与者名称用英文，消息内容可以用中文但必须用双引号包裹。
-            - **示例**:
+            
+            **⚠️ sequenceDiagram 语法要求**:
+            1. **participant 别名格式**: `participant API as "API服务"` ✓
+            2. **消息文本用双引号**: `User->>API: "发起请求"` ✓
+            3. **避免特殊字符**: 不要在消息中使用 `/`, `&`, `<`, `>` 等
+            
+            - **正确示例**:
             ```mermaid
             sequenceDiagram
-                participant User as 用户
-                participant API as API服务
-                participant DB as 数据库
+                participant User as "用户"
+                participant API as "API服务"
+                participant DB as "数据库"
                 User->>API: "发起请求"
                 API->>DB: "查询数据"
                 DB-->>API: "返回结果"
@@ -615,8 +629,25 @@ async def _agent_stream_inner(
             ## 2. System Architecture
             Create a `graph TD` diagram.
             - Show high-level components (e.g., Client, API Server, Database, Worker, External Service).
-            - Label the edges with data flow (e.g., "HTTP/JSON", "SQL").
-            - **Style**: Keep it simple and conceptual.
+            - Label the edges with data flow (e.g., "HTTP", "SQL").
+            - **Style**: Keep it simple and conceptual. Limit to 8 nodes max.
+            
+            **⚠️ Mermaid Syntax Rules (v10.x - MUST FOLLOW)**:
+            1. **Wrap ALL node text in double quotes**: `A["User Client"]` ✓, `A[User Client]` ✗
+            2. **Wrap ALL edge labels in double quotes**: `-->|"HTTP Request"|` ✓, `-->|HTTP Request|` ✗
+            3. **NO special characters in text**: Avoid `/`, `()`, `&`, `<>`, `<br/>` in labels
+            4. **Use short alphanumeric IDs**: e.g., `A`, `B`, `Client`, `API`, `DB`
+            5. **Subgraph titles need quotes**: `subgraph "Core Services"` ✓
+            6. **Database node format**: Use `[("Database")]` for cylinder shape
+            
+            - **Correct Example**:
+            ```mermaid
+            graph TD
+                Client["User Client"] -->|"HTTP Request"| API["API Gateway"]
+                API --> Service["Business Service"]
+                Service --> DB[("Database")]
+                Service -->|"Calls"| External["External API"]
+            ```
 
             ## 3. Core Logic Analysis
             (Create a Markdown Table to summarize key modules. Do not list every file, only the most important ones.)
@@ -641,6 +672,23 @@ async def _agent_stream_inner(
             Select the **Single Most Important** business flow (The "Happy Path").
             Create a `sequenceDiagram`.
             - Participants should be high-level (e.g., User, API, DB), not specific variable names.
+            
+            **⚠️ sequenceDiagram Syntax Rules**:
+            1. **Wrap participant aliases in quotes**: `participant API as "API Server"` ✓
+            2. **Wrap message text in quotes**: `User->>API: "Send Request"` ✓
+            3. **NO special characters**: Avoid `/`, `&`, `<`, `>` in messages
+            
+            - **Correct Example**:
+            ```mermaid
+            sequenceDiagram
+                participant User as "User"
+                participant API as "API Server"
+                participant DB as "Database"
+                User->>API: "Send Request"
+                API->>DB: "Query Data"
+                DB-->>API: "Return Result"
+                API-->>User: "Send Response"
+            ```
             
             ## 6. Quick Start Guide
             - **Prerequisites**: (e.g. Docker, Python 3.9+, .env file)
