@@ -4,11 +4,7 @@
 
   <h1>RepoReaper</h1>
 
-  <h3>
-    💀 Harvest Logic. Dissect Architecture. Chat with Code.
-    <br>
-    基于 AST 深度解析 · 双语适配的自治型代码审计 Agent
-  </h3>
+  <h3>💀 Harvest Logic. Dissect Architecture. Chat with Code.</h3>
 
   <p>
     <a href="./README.md">English</a> • 
@@ -20,21 +16,21 @@
   </a>
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python Version">
   <img src="https://img.shields.io/badge/Model-DeepSeek_V3-673AB7?style=flat-square&logo=openai&logoColor=white" alt="DeepSeek Powered">
-  <img src="https://img.shields.io/badge/Agent-ReAct_Pattern-orange?style=flat-square" alt="Agent Architecture">
+  <img src="https://img.shields.io/badge/Agent-ReAct-orange?style=flat-square" alt="Agent Architecture">
 
   <br>
 
   <img src="https://img.shields.io/badge/RAG-Hybrid_Search-009688?style=flat-square" alt="RAG">
-  <img src="https://img.shields.io/badge/Parser-Python_AST-FFD700?style=flat-square&labelColor=black" alt="AST Parsing">
-  <img src="https://img.shields.io/badge/VectorDB-Chroma-important?style=flat-square" alt="ChromaDB">
+  <img src="https://img.shields.io/badge/VectorDB-Qdrant-important?style=flat-square" alt="Qdrant">
   <img src="https://img.shields.io/badge/Framework-FastAPI-005571?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/Frontend-Vue_3-4FC08D?style=flat-square&logo=vue.js&logoColor=white" alt="Vue 3">
   <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
 
   <br>
   <br>
 
   <p>
-    <b>👇 Live Demo Access / 在线体验 👇</b>
+    <b>👇 Live Demo / 在线体验 👇</b>
   </p>
   <p align="center">
     <a href="https://realdexter-reporeaper.hf.space" target="_blank" rel="noopener noreferrer">
@@ -47,10 +43,8 @@
   </p>
 
   <p align="center">
-    <small style="color: #666;">
-      ⚠️ <strong>Public Demo Limitations</strong>: Hosted instances use shared API quotas. If you encounter rate limits (403/429), please <strong>deploy locally</strong> for the best experience.
-      <br>
-      ⚠️ <strong>演示环境说明</strong>: 中国用户请使用 SEOUL SERVER。在线服务使用共享 API 配额。如遇请求受限或响应缓慢，强烈建议 <strong>Clone 本地运行</strong> 以获取无限制的极速体验。
+    <small>
+      ⚠️ Public demos use shared API quotas. Deploy locally for the best experience.
     </small>
   </p>
 
@@ -63,135 +57,81 @@
 
 ---
 
-
-
-**An intelligent, agentic system for automated architectural analysis and semantic code search.**
-
-This project transcends traditional "Chat with Code" paradigms by implementing an autonomous Agent that mimics the cognitive process of a Senior Tech Lead. Instead of statically indexing a repository, the system treats the Large Language Model (LLM) as the CPU and the Vector Store as a high-speed **Context Cache**. The agent dynamically traverses the repository structure, pre-fetching critical contexts into the "cache" (RAG) and performing Just-In-Time (JIT) reads when semantic gaps are detected.
+An autonomous Agent that dissects any GitHub repository. It maps code architecture, warms up semantic cache, and answers questions with Just-In-Time context retrieval.
 
 ---
 
-## 🚀 Core Philosophy: RAG as an Intelligent Cache
+## ✨ Key Features
 
-In traditional code assistants, RAG (Retrieval-Augmented Generation) is often a static lookup table. In this architecture, we redefine RAG as a **Dynamic L2 Cache** for the LLM:
-
-1.  **Cold Start (Repo Map):** The agent first parses the Abstract Syntax Tree (AST) of the entire repository to build a lightweight symbol map (Classes/Functions). This serves as the "index" to the file system.
-2.  **Prefetching (Analysis Phase):** During the initial analysis, the agent autonomously selects the most critical 10-20 files based on architectural relevance, parses them, and "warms up" the vector store (the cache).
-3.  **Cache Miss Handling (ReAct Loop):** During user Q&A, if the retrieval mechanism (BM25 + Vector) returns insufficient context, the Agent triggers a **Just-In-Time (JIT)** file read. It autonomously tools the GitHub API to fetch missing files, updates the cache in real-time, and re-generates the answer.
-
----
-
-## 🏗 System Architecture & Innovations
-
-### 1. AST-Aware Semantic Chunking
-Standard text chunking destroys code logic. We utilize Python's `ast` module to implement **Structure-Aware Chunking**.
-* **Logical Boundaries:** Code is split by Class and Method definitions, ensuring that a function is never severed in the middle.
-* **Context Injection:** Large classes are decomposed into methods, but the parent class's signature and docstrings are injected into every child chunk. This ensures the LLM understands the "why" (class purpose) even when looking at the "how" (method implementation).
-
-### 2. Asynchronous Concurrency Pipeline
-Built on top of `asyncio` and `httpx`, the system is designed for high-throughput I/O operations.
-* **Non-Blocking Ingestion:** Repository parsing, AST extraction, and vector embedding occur concurrently.
-* **Worker Scalability:** The application runs behind Gunicorn with Uvicorn workers, utilizing a stateless design pattern where the Vector Store Manager synchronizes context via persistent disk storage and shared ChromaDB instances. This allows multiple workers to serve requests without race conditions.
-
-### 3. The "Just-In-Time" ReAct Agent
-The Chat Service implements a sophisticated **Reasoning + Acting (ReAct)** loop:
-* **Query Rewrite:** User queries (often vague or in different languages) are first rewritten by an LLM into precise, English-language technical keywords for optimal BM25/Vector retrieval.
-* **Self-Correction:** If the retrieved context is insufficient, the model does not hallucinate. Instead, it issues a `<tool_code>` command to fetch specific file paths from the repository. The system intercepts this command, pulls the fresh data, indexes it, and feeds it back to the model in a single inference cycle.
-
-### 4. Hybrid Search Mechanism
-To balance semantic understanding with exact keyword matching, the retrieval engine employs a weighted hybrid approach:
-* **Dense Retrieval (Vector):** Uses `BAAI/bge-m3` embeddings to find conceptually similar code (e.g., matching "authentication" to "login logic").
-* **Sparse Retrieval (BM25):** Captures exact variable names, error codes, and specific function signatures that vector embeddings might miss.
-* **Reciprocal Rank Fusion (RRF):** Results are fused and re-ranked to ensure the highest fidelity context is provided to the LLM.
-
-### 5. Native Bilingual Support
-The architecture is completely language-agnostic but optimized for dual-language environments (English/Chinese).
-* **Dynamic Prompt Engineering:** The system detects the user's input language and hot-swaps the System Prompts to ensure the output format, tone, and technical terminology align with the user's locale.
-* **UI Integration:** The frontend includes a dedicated language toggle that influences the entire generation pipeline, from the initial architectural report to the final Q&A.
+| Feature | Description |
+|:--------|:------------|
+| **Multi-Language AST Parsing** | Python AST + Regex patterns for Java, TypeScript, Go, Rust, etc. |
+| **Hybrid Search** | Qdrant vectors + BM25 with RRF fusion |
+| **JIT Context Loading** | Auto-fetches missing files during Q&A |
+| **Query Rewrite** | Translates natural language to code keywords |
+| **End-to-End Tracing** | Langfuse integration for observability |
+| **Auto Evaluation** | LLM-as-Judge scoring pipeline |
 
 ---
 
-## 🛠 Technical Stack
+## 🏗 Architecture
 
-* **Core:** Python 3.10+, FastAPI, AsyncIO
-* **LLM Integration:** OpenAI SDK (compatible with DeepSeek/SiliconFlow)
-* **Vector Database:** ChromaDB (Persistent Storage)
-* **Search Algorithms:** BM25Okapi, Rank-BM25
-* **Parsing:** Python `ast` (Abstract Syntax Trees)
-* **Frontend:** HTML5, Server-Sent Events (SSE) for real-time streaming, Mermaid.js for architecture diagrams.
-* **Deployment:** Docker, Gunicorn, Uvicorn.
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Vue 3 Frontend (SSE Streaming + Mermaid Diagrams)          │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+┌─────────────────────▼───────────────────────────────────────┐
+│  FastAPI Backend                                            │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐   │
+│  │ Agent       │ │ Chat        │ │ Evaluation          │   │
+│  │ Service     │ │ Service     │ │ Framework           │   │
+│  └──────┬──────┘ └──────┬──────┘ └─────────────────────┘   │
+│         │               │                                   │
+│  ┌──────▼───────────────▼──────┐  ┌─────────────────────┐  │
+│  │ Vector Service (Qdrant+BM25)│  │ Tracing (Langfuse)  │  │
+│  └─────────────────────────────┘  └─────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## ⚡ Performance Optimization
+## 🛠 Tech Stack
 
-* **Session Management:** Uses browser `sessionStorage` coupled with server-side persistent contexts, allowing users to refresh pages without losing the "warm" cache state.
-* **Network Resilience:** Implements robust error handling for GitHub API rate limits (403/429) and network timeouts during long-context generation.
-* **Memory Efficiency:** The `VectorStoreManager` is designed to be stateless in memory but stateful on disk, preventing memory leaks in long-running container environments.
+**Backend:** Python 3.10+ · FastAPI · AsyncIO · Qdrant · BM25  
+**Frontend:** Vue 3 · Pinia · Mermaid.js · SSE  
+**LLM:** DeepSeek V3 · SiliconFlow BGE-M3  
+**Ops:** Docker · Gunicorn · Langfuse
 
 ---
 
-4.  ## 🏁 Quick Start
-    
-    **Prerequisites:**
-    * Python 3.9+
-    * Valid GitHub Token
-    * LLM API Keys (DeepSeek-V3 & SiliconFlow bge-m3 recommended).
-    
-    1.  **Clone the Repository**
-        ```bash
-        git clone [https://github.com/tzzp1224/RepoReaper.git](https://github.com/tzzp1224/RepoReaper.git)
-        cd RepoReaper
-        ```
-    
-    2.  **Install Dependencies**
-        Using a virtual environment is recommended:
-        ```bash
-        # Create and activate venv
-        python -m venv venv
-        source venv/bin/activate  # Windows: venv\Scripts\activate
-        
-        # Install requirements
-        pip install -r requirements.txt
-        ```
-    
-    3.  **Configure Environment**
-        Create a `.env` file in the root directory:
-        ```env
-        # GitHub Personal Access Token
-        GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxx
-        
-        # LLM API Key (e.g., DeepSeek)
-        DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxx
-        
-        # Embedding API Key (SiliconFlow)
-        SILICON_API_KEY=sk-xxxxxxxxxxxxxxx
-        ```
-    
-    4. **Start the Service**
-    
-       **Option A: Local Run (Universal)**
-       Compatible with Windows, macOS, and Linux. Recommended for development:        
-    
-       ```bash
-       python -m app.main
-       ```
-    
-        *(Note: Linux users can still use `gunicorn -c gunicorn_conf.py app.main:app` for production deployment)*
-    
-       **Option B: Docker Run 🐳**
-       Run in an isolated container:
-    
-       ```bash
-       # 1. Build Image
-       docker build -t reporeaper .
-       
-       # 2. Run Container (loading env vars)
-       docker run -d -p 8000:8000 --env-file .env --name reporeaper reporeaper
-       ```
-    
-    5.  **Access Dashboard**
-        Navigate to `http://localhost:8000`. Enter a GitHub repository URL to trigger the autonomous analysis agent.
+## 🏁 Quick Start
+
+**Prerequisites:** Python 3.10+ · GitHub Token · LLM API Keys
+
+```bash
+# Clone & Setup
+git clone https://github.com/tzzp1224/RepoReaper.git && cd RepoReaper
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+
+# Configure .env
+cat > .env << EOF
+GITHUB_TOKEN=ghp_xxx
+DEEPSEEK_API_KEY=sk-xxx
+SILICON_API_KEY=sk-xxx
+EOF
+
+# Run
+python -m app.main
+```
+
+**Docker:**
+```bash
+docker build -t reporeaper . && docker run -d -p 8000:8000 --env-file .env reporeaper
+```
+
+Open `http://localhost:8000` and paste any GitHub repo URL.
 
 
 
