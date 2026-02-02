@@ -54,6 +54,9 @@ export function useAnalysis() {
     store.clearLogs()
     store.addLog(`[System] ${actionText} (${store.language.toUpperCase()})...`)
     
+    // 标记开始流式输出
+    store.isStreaming = true
+    
     // SSE 流
     const eventSource = createAnalysisStream(
       store.repoUrl,
@@ -71,6 +74,9 @@ export function useAnalysis() {
         store.addLog(`✅ ${data.message}`, '#15803d')
         eventSource.close()
         
+        // 标记流式输出结束
+        store.isStreaming = false
+        
         store.cacheReport(store.language, store.currentReport)
         store.buttonState = BTN_STATE.REANALYZE
         store.setHint('reportReady', 'success')
@@ -79,6 +85,9 @@ export function useAnalysis() {
       } else if (data.step === 'error') {
         store.addLog(`❌ ${data.message}`, '#b91c1c')
         eventSource.close()
+        
+        // 标记流式输出结束
+        store.isStreaming = false
         
         if (store.lastCheckResult?.has_index) {
           store.buttonState = BTN_STATE.GENERATE
@@ -93,6 +102,7 @@ export function useAnalysis() {
     eventSource.onerror = () => {
       store.addLog('❌ Connection lost', '#b91c1c')
       eventSource.close()
+      store.isStreaming = false
       store.buttonState = BTN_STATE.ANALYZE
     }
   }

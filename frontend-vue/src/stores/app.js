@@ -25,6 +25,9 @@ export const useAppStore = defineStore('app', () => {
   const cachedReports = ref({})  // { en: '...', zh: '...' }
   const currentReport = ref('')
   
+  // === 流式输出状态 ===
+  const isStreaming = ref(false)  // 标记是否正在流式输出报告
+  
   // === 提示系统 ===
   const hint = ref({ key: '', type: 'info' })
   
@@ -176,6 +179,7 @@ export const useAppStore = defineStore('app', () => {
     buttonState,
     cachedReports,
     currentReport,
+    isStreaming,
     hint,
     logs,
     chatMessages,

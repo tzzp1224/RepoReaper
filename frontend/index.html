@@ -301,6 +301,63 @@
             overflow-x: auto; /* 允许小幅横向滚动 */
         }
         .mermaid:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        
+        /* Mermaid 加载中样式 */
+        .mermaid-pending {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 20px 0;
+            background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
+            padding: 40px;
+            border-radius: 8px;
+            border: 1px dashed #7dd3fc;
+            cursor: default;
+        }
+        .mermaid-loading {
+            color: #0369a1;
+            font-size: 14px;
+            animation: mermaidPulse 1.5s ease-in-out infinite;
+        }
+        @keyframes mermaidPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        /* Mermaid 错误样式 */
+        .mermaid-error {
+            margin: 20px 0;
+            padding: 16px;
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+        }
+        .mermaid-error-header {
+            color: #dc2626;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        .mermaid-error details { margin: 8px 0; }
+        .mermaid-error summary {
+            cursor: pointer;
+            color: #4b5563;
+            font-size: 14px;
+        }
+        .mermaid-source {
+            background: #1f2937;
+            color: #e5e7eb;
+            padding: 12px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin-top: 8px;
+            font-size: 13px;
+        }
+        .mermaid-error-tip {
+            color: #6b7280;
+            font-size: 13px;
+            margin-top: 8px;
+            font-style: italic;
+        }
 
         /* 聊天气泡样式 */
         .chat-container { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 24px; }
@@ -915,48 +972,211 @@
         }).join('\n');
     }
 
-    // === Mermaid 渲染与交互绑定 ===
-    async function renderMermaidDiagrams(rootNode) {
-        if (!rootNode) return;
-        const blocks = rootNode.querySelectorAll('code.language-mermaid');
-        if (blocks.length === 0) return;
-
-        const processPromises = [];
+    // === Mermaid 渲染状态管理（修正版）===
+    let isMermaidRendering = false;
+    let mermaidCheckTimeout = null;
+    const MERMAID_CHECK_INTERVAL = 350;  // 检测间隔
+    // 存储已渲染的代码块 - key 是代码内容，value 是渲染后的 HTML
+    const renderedMermaidCache = new Map();
+    
+    /**
+     * 获取 markdown 中所有完整的 mermaid 代码块内容集合
+     */
+    function getCompleteMermaidCodes(markdown) {
+        if (!markdown) return new Set();
         
-        for (let i = 0; i < blocks.length; i++) {
-            const block = blocks[i];
-            // 预处理 Mermaid 代码，修复中文问题
-            const code = sanitizeMermaidCode(block.textContent);
-            const pre = block.parentElement; 
+        const codes = new Set();
+        const mermaidBlockRegex = /```mermaid\s*\n([\s\S]*?)```/g;
+        let match;
+        
+        while ((match = mermaidBlockRegex.exec(markdown)) !== null) {
+            const code = match[1].trim();
+            if (code.length > 0) {
+                codes.add(code);
+            }
+        }
+        
+        return codes;
+    }
+    
+    /**
+     * 启动增量渲染检测（流式输出期间调用）
+     */
+    function startIncrementalMermaidCheck() {
+        if (mermaidCheckTimeout) return;
+        
+        mermaidCheckTimeout = setInterval(() => {
+            renderAllCompleteMermaidBlocks();
+        }, MERMAID_CHECK_INTERVAL);
+    }
+    
+    /**
+     * 停止增量渲染检测
+     */
+    function stopIncrementalMermaidCheck() {
+        if (mermaidCheckTimeout) {
+            clearInterval(mermaidCheckTimeout);
+            mermaidCheckTimeout = null;
+        }
+    }
+    
+    /**
+     * 渲染所有完整的 Mermaid 代码块
+     * 核心逻辑：
+     * 1. 从 markdown 源码中提取所有完整的代码块内容
+     * 2. 查找 DOM 中所有 code.language-mermaid 元素
+     * 3. 只渲染内容在完整列表中的代码块
+     */
+    async function renderAllCompleteMermaidBlocks() {
+        const reportDiv = document.getElementById('report');
+        if (!reportDiv) return;
+        if (isMermaidRendering) return;
+        
+        // 获取 markdown 中所有完整的代码块内容
+        const completeCodes = getCompleteMermaidCodes(fullReportMarkdown);
+        
+        if (completeCodes.size === 0) return;
+        
+        // 查找 DOM 中所有未渲染的 code.language-mermaid 元素
+        const codeBlocks = reportDiv.querySelectorAll('code.language-mermaid');
+        
+        if (codeBlocks.length === 0) return;
+        
+        // 找出需要渲染的代码块（内容在完整列表中的）
+        const blocksToRender = [];
+        for (const codeBlock of codeBlocks) {
+            const code = codeBlock.textContent.trim();
+            if (completeCodes.has(code)) {
+                blocksToRender.push(codeBlock);
+            }
+        }
+        
+        if (blocksToRender.length === 0) return;
+        
+        console.log(`[Mermaid] Rendering ${blocksToRender.length} complete block(s)...`);
+        
+        isMermaidRendering = true;
+        
+        try {
+            for (let i = 0; i < blocksToRender.length; i++) {
+                const codeBlock = blocksToRender[i];
+                
+                // 检查元素是否还在 DOM 中
+                if (!codeBlock.parentElement) continue;
+                
+                // 让出主线程
+                await new Promise(resolve => {
+                    if (window.requestIdleCallback) {
+                        requestIdleCallback(resolve, { timeout: 50 });
+                    } else {
+                        setTimeout(resolve, 10);
+                    }
+                });
+                
+                await renderSingleMermaidBlock(codeBlock);
+            }
             
-            const id = `mermaid-${Date.now()}-${i}`;
+            console.log('[Mermaid] Render complete');
+        } catch (e) {
+            console.error('[Mermaid] Render error:', e);
+        } finally {
+            isMermaidRendering = false;
+        }
+    }
+    
+    /**
+     * 渲染单个代码块
+     */
+    async function renderSingleMermaidBlock(codeBlock) {
+        const originalCode = codeBlock.textContent.trim();
+        const pre = codeBlock.parentElement;
+        
+        if (!pre || pre.tagName !== 'PRE') return;
+        
+        // 检查缓存 - 如果这段代码已经渲染过，直接使用缓存的 HTML
+        if (renderedMermaidCache.has(originalCode)) {
+            console.log('[Mermaid] Using cached render result');
+            const cachedHtml = renderedMermaidCache.get(originalCode);
+            
             const div = document.createElement('div');
-            div.id = id;
             div.className = 'mermaid';
-            div.textContent = code;
+            div.innerHTML = cachedHtml;
+            div.style.cursor = 'zoom-in';
+            div.style.overflowX = 'auto';
+            
+            div.onclick = function() {
+                openModal(div.innerHTML);
+            };
             
             pre.replaceWith(div);
-            processPromises.push(div);
+            return;
         }
-
+        
+        const code = sanitizeMermaidCode(originalCode);
+        
+        const div = document.createElement('div');
+        div.id = `mermaid-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+        div.className = 'mermaid';
+        div.dataset.originalCode = originalCode;
+        div.textContent = code;
+        
+        pre.replaceWith(div);
+        
         try {
-            await mermaid.run({ nodes: processPromises });
-
-            // 渲染完成后，绑定点击事件
-            processPromises.forEach(div => {
-                const svg = div.querySelector('svg');
-                if (svg) {
-                    div.onclick = function() {
-                        openModal(div.innerHTML);
-                    };
-                    // 允许容器内小幅横向滚动
-                    div.style.overflowX = 'auto';
-                    svg.style.maxWidth = '100%'; 
-                }
-            });
+            await mermaid.run({ nodes: [div] });
+            
+            const svg = div.querySelector('svg');
+            if (svg) {
+                div.onclick = function() {
+                    openModal(div.innerHTML);
+                };
+                div.style.overflowX = 'auto';
+                div.style.cursor = 'zoom-in';
+                svg.style.maxWidth = '100%';
+                
+                // 缓存渲染结果
+                renderedMermaidCache.set(originalCode, div.innerHTML);
+                console.log('[Mermaid] Block rendered and cached successfully');
+            }
         } catch (e) {
-            console.error("Mermaid rendering failed:", e);
+            console.error('[Mermaid] Block render failed:', e);
+            
+            div.classList.add('mermaid-error');
+            div.innerHTML = `
+                <div class="mermaid-error-header">⚠️ 图表渲染失败</div>
+                <details>
+                    <summary>查看原始 Mermaid 代码</summary>
+                    <pre class="mermaid-source"><code>${escapeHtmlForMermaid(originalCode)}</code></pre>
+                </details>
+                <div class="mermaid-error-tip">提示: 请检查代码语法，中文文本需用双引号包裹</div>
+            `;
         }
+    }
+    
+    /**
+     * 完整渲染（流结束时调用）
+     */
+    async function renderMermaidDiagrams(rootNode) {
+        stopIncrementalMermaidCheck();
+        await renderAllCompleteMermaidBlocks();
+        console.log('[Mermaid] Final render complete');
+    }
+    
+    /**
+     * 重置渲染状态（新分析开始时调用）
+     */
+    function resetMermaidState() {
+        stopIncrementalMermaidCheck();
+        isMermaidRendering = false;
+        renderedMermaidCache.clear();
+        console.log('[Mermaid] State reset, cache cleared');
+    }
+    
+    // === HTML 转义函数 ===
+    function escapeHtmlForMermaid(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
     // === 主按钮点击处理 ===
@@ -1016,6 +1236,7 @@
         
         // 清空并显示加载提示
         fullReportMarkdown = "";
+        resetMermaidState();  // 重置 Mermaid 渲染状态
         const actionText = regenerateOnly ? 'Generating report' : 'Analyzing code';
         reportDiv.innerHTML = `<div style='color:#94a3b8; text-align:center; margin-top:40px'>⏳ ${actionText} (${lang.toUpperCase()})...</div>`;
         toggleChat(false);
@@ -1027,6 +1248,9 @@
         const eventSource = new EventSource(
             `${API_BASE}/analyze?url=${encodeURIComponent(url)}&session_id=${currentSessionId}&language=${lang}&regenerate_only=${regenerateOnly}`
         );
+        
+        // 启动增量渲染检测
+        startIncrementalMermaidCheck();
         
         eventSource.onmessage = function(event) {
             const data = JSON.parse(event.data);
@@ -1040,6 +1264,9 @@
             } else if (data.step === 'finish') {
                 logAppend(`✅ ${data.message}`, "#15803d");
                 eventSource.close();
+                
+                // 停止增量检测并进行最终渲染
+                stopIncrementalMermaidCheck();
                 
                 // 缓存报告
                 cachedReports[lang] = fullReportMarkdown;
@@ -1055,6 +1282,7 @@
             } else if (data.step === 'error') {
                 logAppend(`❌ ${data.message}`, "#b91c1c");
                 eventSource.close();
+                stopIncrementalMermaidCheck();  // 停止增量检测
                 // 错误时恢复到适当状态
                 if (lastCheckResult && lastCheckResult.has_index) {
                     setButtonState(BTN_STATE.GENERATE);
@@ -1070,6 +1298,7 @@
         eventSource.onerror = function(err) {
             logAppend("❌ Connection lost", "#b91c1c");
             eventSource.close();
+            stopIncrementalMermaidCheck();  // 停止增量检测
             setButtonState(BTN_STATE.ANALYZE);
         };
     }

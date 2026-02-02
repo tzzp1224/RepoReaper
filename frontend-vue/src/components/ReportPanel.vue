@@ -5,7 +5,8 @@
       <div v-if="!store.currentReport" class="placeholder">
         📊 The project architecture report will be generated here.
       </div>
-      <div v-else v-html="renderedReport"></div>
+      <!-- 报告内容容器，由 JS 手动管理 innerHTML -->
+      <div v-else ref="reportContentRef"></div>
     </div>
     
     <!-- 悬浮工具栏 -->
@@ -21,13 +22,34 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onMounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { marked } from 'marked'
 import mermaid from 'mermaid'
 import { useAppStore } from '../stores/app'
 
 const store = useAppStore()
 const reportRef = ref(null)
+const reportContentRef = ref(null)
+
+// === Mermaid 渲染状态管理 ===
+let mermaidRenderTimeout = null
+let isRendering = ref(false)
+let lastRenderTime = 0
+const RENDER_THROTTLE_MS = 400  // 节流间隔（最少间隔多久渲染一次）
+
+// 存储已渲染的代码块 - key 是代码内容，value 是 { html: string, isError: boolean }
+const renderedMermaidCache = new Map()
+// 错误 HTML 生成函数
+function createErrorHtml(originalCode) {
+  return `
+    <div class="mermaid-error-header">⚠️ 图表渲染失败</div>
+    <details>
+      <summary>查看原始 Mermaid 代码</summary>
+      <pre class="mermaid-source"><code>${escapeHtml(originalCode)}</code></pre>
+    </details>
+    <div class="mermaid-error-tip">提示: 请检查代码语法，中文文本需用双引号包裹</div>
+  `
+}
 
 // 初始化 Mermaid
 onMounted(() => {
@@ -35,7 +57,6 @@ onMounted(() => {
     startOnLoad: false,
     theme: 'neutral',
     securityLevel: 'loose',
-    // 改进的配置以支持中文
     flowchart: {
       htmlLabels: true,
       useMaxWidth: true
@@ -44,6 +65,14 @@ onMounted(() => {
       useMaxWidth: true
     }
   })
+})
+
+// 清理定时器
+onUnmounted(() => {
+  if (mermaidRenderTimeout) {
+    clearTimeout(mermaidRenderTimeout)
+    mermaidRenderTimeout = null
+  }
 })
 
 /**
@@ -107,78 +136,295 @@ function sanitizeMermaidCode(code) {
   }).join('\n')
 }
 
-// 渲染 Markdown
-const renderedReport = computed(() => {
-  return marked.parse(store.currentReport)
-})
-
-// 监听报告变化，渲染 Mermaid
-watch(() => store.currentReport, async (newVal) => {
-  if (newVal) {
-    await nextTick()
-    renderMermaid()
+/**
+ * 获取 markdown 中所有完整的 mermaid 代码块内容集合
+ */
+function getCompleteMermaidCodes(markdown) {
+  if (!markdown) return new Set()
+  
+  const codes = new Set()
+  const mermaidBlockRegex = /```mermaid\s*\n([\s\S]*?)```/g
+  let match
+  
+  while ((match = mermaidBlockRegex.exec(markdown)) !== null) {
+    const code = match[1].trim()
+    if (code.length > 0) {
+      codes.add(code)
+    }
   }
-})
+  
+  return codes
+}
 
-async function renderMermaid() {
-  if (!reportRef.value) return
+/**
+ * 同步恢复已缓存的 mermaid 图表（防止闪烁）
+ * 在更新 innerHTML 后立即调用
+ * 支持恢复成功渲染和失败渲染两种状态
+ */
+function restoreCachedMermaids(container) {
+  if (!container) return
   
-  const blocks = reportRef.value.querySelectorAll('code.language-mermaid')
-  if (blocks.length === 0) return
-  
-  const divsToRender = []
-  
-  // 存储原始代码用于降级显示
-  const originalCodes = []
-  
-  blocks.forEach((block, i) => {
-    let code = block.textContent
-    originalCodes.push(code) // 保存原始代码
-    // 预处理 Mermaid 代码，修复中文问题
-    code = sanitizeMermaidCode(code)
-    
-    const pre = block.parentElement
-    
-    const div = document.createElement('div')
-    div.id = `mermaid-${Date.now()}-${i}`
-    div.className = 'mermaid'
-    div.textContent = code
-    div.dataset.originalCode = originalCodes[i] // 存储原始代码到元素上
-    
-    pre.replaceWith(div)
-    divsToRender.push(div)
-  })
-  
-  // 逐个渲染，单个失败不影响其他图表
-  for (let i = 0; i < divsToRender.length; i++) {
-    const div = divsToRender[i]
-    try {
-      await mermaid.run({ nodes: [div] })
+  const codeBlocks = container.querySelectorAll('code.language-mermaid')
+  for (const code of codeBlocks) {
+    const content = code.textContent.trim()
+    if (renderedMermaidCache.has(content)) {
+      const cached = renderedMermaidCache.get(content)
+      const div = document.createElement('div')
       
-      const svg = div.querySelector('svg')
-      if (svg) {
+      if (cached.isError) {
+        // 恢复错误状态
+        div.className = 'mermaid-error'
+        div.innerHTML = cached.html
+      } else {
+        // 恢复成功渲染的图表
+        div.className = 'mermaid'
+        div.innerHTML = cached.html
         div.style.cursor = 'zoom-in'
         div.style.overflowX = 'auto'
-        svg.style.maxWidth = '100%'
+        div.dataset.originalCode = content
         
         div.onclick = () => {
           emit('openModal', div.innerHTML)
         }
       }
-    } catch (e) {
-      console.error(`Mermaid rendering failed for diagram ${i}:`, e)
-      // 渲染失败时显示降级内容
-      const errorDiv = document.createElement('div')
-      errorDiv.className = 'mermaid-error'
-      errorDiv.innerHTML = `
-        <div class="mermaid-error-header">⚠️ 图表渲染失败</div>
-        <details>
-          <summary>查看原始 Mermaid 代码</summary>
-          <pre class="mermaid-source"><code>${escapeHtml(div.dataset.originalCode || div.textContent)}</code></pre>
-        </details>
-        <div class="mermaid-error-tip">提示: 请检查代码语法，中文文本需用双引号包裹</div>
-      `
-      div.replaceWith(errorDiv)
+      
+      const pre = code.parentElement
+      if (pre && pre.tagName === 'PRE') {
+        pre.replaceWith(div)
+      }
+    }
+  }
+}
+
+/**
+ * 更新报告内容（手动管理 DOM，避免 v-html 导致的闪烁）
+ */
+function updateReportContent(markdown) {
+  if (!reportContentRef.value) return
+  
+  // 1. 更新 HTML
+  reportContentRef.value.innerHTML = marked.parse(markdown)
+  
+  // 2. 立即同步恢复已缓存的 mermaid（防止闪烁）
+  restoreCachedMermaids(reportContentRef.value)
+}
+
+/**
+ * 监听报告变化 - 手动管理 DOM 更新
+ */
+watch(() => store.currentReport, async (newVal, oldVal) => {
+  // 如果报告被清空，清除缓存和定时器
+  if (!newVal) {
+    if (mermaidRenderTimeout) {
+      clearTimeout(mermaidRenderTimeout)
+      mermaidRenderTimeout = null
+    }
+    if (reportContentRef.value) {
+      reportContentRef.value.innerHTML = ''
+    }
+    renderedMermaidCache.clear()
+    lastRenderTime = 0
+    console.log('[Mermaid] Report cleared, cache cleared')
+    return
+  }
+  
+  // 如果是新报告（旧值为空或不存在），清除缓存
+  if (!oldVal) {
+    renderedMermaidCache.clear()
+    lastRenderTime = 0
+    console.log('[Mermaid] New report started, cache cleared')
+  }
+  
+  // 等待 Vue 渲染 v-else 分支后再更新内容
+  await nextTick()
+  
+  // 更新报告内容（会同步恢复已缓存的 mermaid）
+  updateReportContent(newVal)
+  
+  // 检查是否包含 mermaid 代码块
+  if (!newVal.includes('```mermaid')) return
+  
+  // 节流逻辑：渲染新的 mermaid 图表
+  const now = Date.now()
+  const timeSinceLastRender = now - lastRenderTime
+  
+  if (timeSinceLastRender >= RENDER_THROTTLE_MS) {
+    // 可以立即渲染新图表（流式期间，不缓存错误）
+    lastRenderTime = now
+    await renderAllCompleteMermaidBlocks(false)
+  } else {
+    // 设置定时器在剩余时间后渲染新图表
+    if (!mermaidRenderTimeout) {
+      const remainingTime = RENDER_THROTTLE_MS - timeSinceLastRender
+      mermaidRenderTimeout = setTimeout(async () => {
+        mermaidRenderTimeout = null
+        lastRenderTime = Date.now()
+        await renderAllCompleteMermaidBlocks(false)
+      }, remainingTime)
+    }
+  }
+})
+
+/**
+ * 监听流式输出结束，确保最终渲染
+ */
+watch(() => store.isStreaming, async (isStreaming, wasStreaming) => {
+  if (wasStreaming && !isStreaming) {
+    console.log('[Mermaid] Streaming finished, final render...')
+    
+    // 清除定时器
+    if (mermaidRenderTimeout) {
+      clearTimeout(mermaidRenderTimeout)
+      mermaidRenderTimeout = null
+    }
+    
+    // 等待 DOM 完全更新后进行最终渲染
+    await nextTick()
+    setTimeout(async () => {
+      await renderAllCompleteMermaidBlocks(true)  // 最终渲染，缓存错误
+    }, 150)
+  }
+})
+
+/**
+ * 渲染所有完整的 Mermaid 代码块
+ * @param {boolean} isFinalRender - 是否为最终渲染（流式结束后）
+ * 核心逻辑：
+ * 1. 从 markdown 源码中提取所有完整的代码块
+ * 2. 查找 DOM 中所有 code.language-mermaid 元素
+ * 3. 只渲染内容在完整列表中且未被缓存的代码块
+ */
+async function renderAllCompleteMermaidBlocks(isFinalRender = false) {
+  if (!reportContentRef.value) return
+  if (isRendering.value) {
+    console.log('[Mermaid] Already rendering, scheduling retry...')
+    mermaidRenderTimeout = setTimeout(() => renderAllCompleteMermaidBlocks(), 200)
+    return
+  }
+  
+  const markdown = store.currentReport
+  if (!markdown) return
+  
+  // 获取 markdown 中所有完整的代码块
+  const completeCodes = getCompleteMermaidCodes(markdown)
+  
+  if (completeCodes.size === 0) return
+  
+  // 查找 DOM 中所有未渲染的 code.language-mermaid 元素
+  const codeBlocks = reportContentRef.value.querySelectorAll('code.language-mermaid')
+  
+  if (codeBlocks.length === 0) return
+  
+  // 找出需要渲染的代码块（内容在完整列表中且未被缓存的）
+  const blocksToRender = []
+  for (const codeBlock of codeBlocks) {
+    const code = codeBlock.textContent.trim()
+    // 只渲染完整且未缓存的代码块
+    if (completeCodes.has(code) && !renderedMermaidCache.has(code)) {
+      blocksToRender.push(codeBlock)
+    }
+  }
+  
+  if (blocksToRender.length === 0) return
+  
+  console.log(`[Mermaid] Rendering ${blocksToRender.length} complete block(s)...`)
+  
+  isRendering.value = true
+  
+  try {
+    for (let i = 0; i < blocksToRender.length; i++) {
+      const codeBlock = blocksToRender[i]
+      
+      // 再次检查元素是否还在 DOM 中（可能被后续更新移除）
+      if (!codeBlock.parentElement) continue
+      
+      // 让出主线程，避免卡顿
+      await new Promise(resolve => {
+        if (window.requestIdleCallback) {
+          requestIdleCallback(resolve, { timeout: 50 })
+        } else {
+          setTimeout(resolve, 10)
+        }
+      })
+      
+      // 检查是否报告已被清空
+      if (!store.currentReport || !reportContentRef.value) {
+        console.log('[Mermaid] Report cleared, stopping render')
+        break
+      }
+      
+      await renderSingleCodeBlock(codeBlock, isFinalRender)
+    }
+    
+    console.log('[Mermaid] Render complete')
+  } catch (e) {
+    console.error('[Mermaid] Render error:', e)
+  } finally {
+    isRendering.value = false
+  }
+}
+
+/**
+ * 渲染单个代码块
+ * @param {Element} codeBlock - 代码块元素
+ * @param {boolean} isFinalRender - 是否为最终渲染（流式结束后），只有最终渲染才缓存错误
+ */
+async function renderSingleCodeBlock(codeBlock, isFinalRender = false) {
+  const originalCode = codeBlock.textContent.trim()
+  const pre = codeBlock.parentElement
+  
+  if (!pre || pre.tagName !== 'PRE') return
+  
+  // 检查缓存 - 如果这段代码已经处理过（成功或失败），跳过
+  if (renderedMermaidCache.has(originalCode)) {
+    return
+  }
+  
+  const code = sanitizeMermaidCode(originalCode)
+  
+  const div = document.createElement('div')
+  div.id = `mermaid-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`
+  div.className = 'mermaid'
+  div.dataset.originalCode = originalCode
+  div.textContent = code
+  
+  pre.replaceWith(div)
+  
+  try {
+    await mermaid.run({ nodes: [div] })
+    
+    const svg = div.querySelector('svg')
+    if (svg) {
+      div.style.cursor = 'zoom-in'
+      div.style.overflowX = 'auto'
+      svg.style.maxWidth = '100%'
+      
+      // 缓存成功渲染结果
+      renderedMermaidCache.set(originalCode, { html: div.innerHTML, isError: false })
+      
+      div.onclick = () => {
+        emit('openModal', div.innerHTML)
+      }
+    }
+    // 注意：如果 mermaid.run 成功但没有 SVG，不做任何处理
+    // 让下一次渲染周期再尝试（因为没有加入缓存）
+  } catch (e) {
+    console.error('[Mermaid] Render failed:', e)
+    
+    if (isFinalRender) {
+      // 最终渲染失败，缓存错误状态
+      const errorHtml = createErrorHtml(originalCode)
+      renderedMermaidCache.set(originalCode, { html: errorHtml, isError: true })
+      div.className = 'mermaid-error'
+      div.innerHTML = errorHtml
+    } else {
+      // 流式期间失败，不缓存，恢复为代码块，让后续重试
+      const newPre = document.createElement('pre')
+      const newCode = document.createElement('code')
+      newCode.className = 'language-mermaid'
+      newCode.textContent = originalCode
+      newPre.appendChild(newCode)
+      div.replaceWith(newPre)
     }
   }
 }
@@ -375,5 +621,28 @@ ${processedHtml}
   font-size: 13px;
   margin-top: 8px;
   font-style: italic;
+}
+
+/* Mermaid 加载中样式 */
+.markdown-body :deep(.mermaid-pending) {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 20px 0;
+  background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
+  padding: 40px;
+  border-radius: 8px;
+  border: 1px dashed #7dd3fc;
+}
+
+.markdown-body :deep(.mermaid-loading) {
+  color: #0369a1;
+  font-size: 14px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 </style>
