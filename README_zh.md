@@ -107,7 +107,7 @@
 
 ## 🏁 快速开始
 
-**前置要求:** Python 3.10+ · GitHub Token · LLM API Key
+**前置要求:** Python 3.10+ ·（可选）Node 18+ 用于重新构建前端 · GitHub Token（推荐）· LLM API Key（必需）
 
 ```bash
 # 克隆 & 安装
@@ -115,23 +115,36 @@ git clone https://github.com/tzzp1224/RepoReaper.git && cd RepoReaper
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
-# 配置 .env
-cat > .env << EOF
-GITHUB_TOKEN=ghp_xxx
-DEEPSEEK_API_KEY=sk-xxx
-SILICON_API_KEY=sk-xxx
-EOF
+# 配置 .env（建议从示例复制）
+cp .env.example .env
+# 必需：设置 LLM_PROVIDER 以及对应的 *_API_KEY
+# 推荐：GITHUB_TOKEN 和 SILICON_API_KEY（Embedding）
+
+# （可选）构建前端（仓库已包含 frontend-dist）
+cd frontend-vue
+npm install
+npm run build
+cd ..
 
 # 启动
 python -m app.main
 ```
 
-**Docker 部署:**
+访问 `http://localhost:8000`，输入任意 GitHub 仓库地址开始审计。
+
+**Docker（单容器，本地 Qdrant）：**
 ```bash
-docker build -t reporeaper . && docker run -d -p 8000:8000 --env-file .env reporeaper
+cp .env.example .env
+docker build -t reporeaper .
+docker run -d -p 8000:8000 --env-file .env reporeaper
 ```
 
-访问 `http://localhost:8000`，输入任意 GitHub 仓库地址开始审计。
+**Docker Compose（推荐，包含 Qdrant Server）：**
+```bash
+cp .env.example .env
+# 在 .env 中设置 QDRANT_MODE=server 与 QDRANT_URL=http://qdrant:6333
+docker compose up -d --build
+```
 
 ---
 

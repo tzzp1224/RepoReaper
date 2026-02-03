@@ -107,7 +107,7 @@ An autonomous Agent that dissects any GitHub repository. It maps code architectu
 
 ## 🏁 Quick Start
 
-**Prerequisites:** Python 3.10+ · GitHub Token · LLM API Keys
+**Prerequisites:** Python 3.10+ · (Optional) Node 18+ for rebuilding frontend · GitHub Token (recommended) · LLM API Key (required)
 
 ```bash
 # Clone & Setup
@@ -115,23 +115,36 @@ git clone https://github.com/tzzp1224/RepoReaper.git && cd RepoReaper
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
-# Configure .env
-cat > .env << EOF
-GITHUB_TOKEN=ghp_xxx
-DEEPSEEK_API_KEY=sk-xxx
-SILICON_API_KEY=sk-xxx
-EOF
+# Configure .env (copy from example and fill in your keys)
+cp .env.example .env
+# Required: set LLM_PROVIDER and the matching *_API_KEY
+# Recommended: GITHUB_TOKEN and SILICON_API_KEY (embeddings)
+
+# (Optional) Build frontend (repo already contains frontend-dist)
+cd frontend-vue
+npm install
+npm run build
+cd ..
 
 # Run
 python -m app.main
 ```
 
-**Docker:**
+Open `http://localhost:8000` and paste any GitHub repo URL.
+
+**Docker (single container, local Qdrant):**
 ```bash
-docker build -t reporeaper . && docker run -d -p 8000:8000 --env-file .env reporeaper
+cp .env.example .env
+docker build -t reporeaper .
+docker run -d -p 8000:8000 --env-file .env reporeaper
 ```
 
-Open `http://localhost:8000` and paste any GitHub repo URL.
+**Docker Compose (recommended, with Qdrant Server):**
+```bash
+cp .env.example .env
+# Set QDRANT_MODE=server and QDRANT_URL=http://qdrant:6333 in .env
+docker compose up -d --build
+```
 
 
 
