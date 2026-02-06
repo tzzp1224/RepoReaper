@@ -150,7 +150,7 @@ docker compose up -d --build
 
 
 
-## � Evaluation & Tracing Status
+## 📊 Evaluation & Tracing Status
 
 | Component | Status | Notes |
 |:----------|:------:|:------|
@@ -203,7 +203,7 @@ docker compose up -d --build
 
 ---
 
-## �📈 Star History
+## 📈 Star History
 
 <a href="https://star-history.com/#tzzp1224/RepoReaper&Date">
  <picture>

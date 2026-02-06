@@ -148,7 +148,7 @@ docker compose up -d --build
 
 ---
 
-## � 评估与追踪现状
+## 📊 评估与追踪现状
 
 | 组件 | 状态 | 说明 |
 |:----|:----:|:----|
@@ -201,7 +201,7 @@ docker compose up -d --build
 
 ---
 
-## �📈 Star History
+## 📈 Star History
 
 <a href="https://star-history.com/#tzzp1224/RepoReaper&Date">
  <picture>
