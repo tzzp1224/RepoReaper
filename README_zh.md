@@ -148,7 +148,60 @@ docker compose up -d --build
 
 ---
 
-## 📈 Star History
+## � 评估与追踪现状
+
+| 组件 | 状态 | 说明 |
+|:----|:----:|:----|
+| **自研评估引擎** | ✅ 可用 | 四层指标（QueryRewrite / Retrieval / Generation / Agentic），LLM-as-Judge 判分 |
+| **在线自动评估** | ✅ 可用 | 每次 `/chat` 结束后异步触发，结果写入 `evaluation/sft_data/` |
+| **数据路由 (SFT)** | ✅ 可用 | 按评分自动分流 Gold/Silver/Bronze/Rejected → JSONL 文件 |
+| **评估 API** | ✅ 可用 | `/evaluate`、`/evaluation/stats`、`/dashboard/*`、`/auto-eval/*` 共 7 个端点 |
+| **离线检索评估** | ✅ 可用 | `test_retrieval.py` — Hit Rate、Recall@K、Precision@K、MRR |
+| **Langfuse 追踪** | ⚠️ 部分完成 | 框架 + 14 处埋点已就位（agent/chat service）；不可用时自动降级为本地日志 `logs/traces/` |
+| **Ragas 集成** | ❌ 占位 | 默认 `use_ragas=False`；`_ragas_eval()` 调用方式与最新 Ragas SDK 不兼容 |
+| **Langfuse ↔ 评估** | ❌ 未打通 | 评估结果仅写 JSONL，未上报 Langfuse Scores API |
+
+> **综合完成度约 65%**：自研评估链路已闭环可用；Ragas 与 Langfuse 集成均为半成品。
+
+---
+
+## ⚠️ 已知问题
+
+1. **Python 3.14 + Langfuse 导入报错**  
+   `pydantic.V1.errors.ConfigError: unable to infer type for attribute "description"` — Langfuse 3.x 内部依赖 `pydantic.v1` 兼容层，在 Python 3.14 下不兼容。  
+   **临时方案：** 在 `.env` 中设置 `LANGFUSE_ENABLED=false`，或使用 Python 3.10–3.12。
+
+2. **`docker-compose.yml` 未包含 Langfuse 服务**  
+   即使导入成功，仍需运行中的 Langfuse 实例。请自行添加或使用 [app.langfuse.com](https://app.langfuse.com)。
+
+3. **Trace 链路未关联**  
+   `tracing_service` 记录了 span/event，但调用 Langfuse API 时未传 `trace_id`，Langfuse UI 中只能看到孤立事件而非完整链路树。
+
+4. **Ragas `_ragas_eval()` API 过时**  
+   当前向 `ragas.evaluate()` 传递 dict，最新 Ragas 要求 `Dataset` 对象。已导出 `ragas_eval_dataset.json` 但无脚本消费它。
+
+5. **黄金数据集缺少标准答案**  
+   26 条测试用例的 `expected_answer` 均为空，无法做生成质量的 ground truth 对比。
+
+6. **启发式降级较粗糙**  
+   无 LLM client 时，`faithfulness` 用关键词重叠 + 0.2 基础分；`completeness` 纯粹按字数判断。
+
+---
+
+## 🗺 路线图
+
+- [ ] **修复 Langfuse 兼容性** — 固定 `langfuse`/`pydantic` 版本或按 Python 版本门控导入
+- [ ] **`docker-compose.yml` 加入 Langfuse** — 一键启动本地可观测平台
+- [ ] **串联 trace_id** — 让 Langfuse UI 展示完整链路树
+- [ ] **正式接入 Ragas** — 更新 `_ragas_eval()` 使用 `ragas.evaluate(Dataset(...))`，新增独立评估脚本
+- [ ] **丰富黄金数据集** — 补充 `expected_answer`，扩展至 50+ 条用例
+- [ ] **评估仪表盘前端** — Vue 组件可视化质量分布与 Bad Case
+- [ ] **CI 回归基线** — 在 GitHub Actions 中运行 `test_retrieval.py`，指标回退时失败
+- [ ] **对接 Langfuse Datasets** — 将评估结果推送到 Langfuse Scores/Datasets API，统一可观测
+
+---
+
+## �📈 Star History
 
 <a href="https://star-history.com/#tzzp1224/RepoReaper&Date">
  <picture>
