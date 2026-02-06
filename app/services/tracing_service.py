@@ -29,11 +29,19 @@ from dataclasses import dataclass
 # 第一部分: Langfuse客户端初始化 (可选)
 # ============================================================================
 
-try:
-    from langfuse import Langfuse
-    from langfuse.decorators import observe, langfuse_context
-    LANGFUSE_AVAILABLE = True
-except ImportError:
+LANGFUSE_IMPORT_ERROR = None
+_LANGFUSE_ENABLED_ENV = os.getenv("LANGFUSE_ENABLED", "true").strip().lower()
+_LANGFUSE_ENABLED = _LANGFUSE_ENABLED_ENV not in {"0", "false", "no", "off"}
+
+if _LANGFUSE_ENABLED:
+    try:
+        from langfuse import Langfuse
+        from langfuse.decorators import observe, langfuse_context
+        LANGFUSE_AVAILABLE = True
+    except Exception as e:
+        LANGFUSE_IMPORT_ERROR = e
+        LANGFUSE_AVAILABLE = False
+else:
     LANGFUSE_AVAILABLE = False
 
 
