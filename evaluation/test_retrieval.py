@@ -107,12 +107,16 @@ class RetrievalEvaluator:
         
         # 获取仓库文件列表
         print("📂 Fetching repository structure...")
-        file_list = get_repo_structure(repo_url)  # 同步函数，不需要 await
+        file_list = await get_repo_structure(repo_url)
         print(f"   Found {len(file_list)} files")
         
         # 获取向量存储
         store = store_manager.get_store(session_id)
-        chunk_count = store.collection.count()  # 使用 collection.count()
+        await store.initialize()
+        chunk_count = len(getattr(store, "_doc_store", []))
+        if chunk_count == 0 and getattr(store, "_qdrant", None):
+            stats = await store._qdrant.get_stats()
+            chunk_count = stats.document_count
         if chunk_count == 0:
             print("\n⚠️  Vector store is empty!")
             print("   Please run the agent first to index the repository.")

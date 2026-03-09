@@ -70,7 +70,7 @@ auto_eval_config = EvaluationConfig(
     enabled=True,
     use_ragas=False,              # Phase 1: 先不用 Ragas，避免额外依赖
     async_evaluation=True,        # 异步模式，不阻塞响应
-    min_quality_score=0.4,        # 最低分数阈值（0.4 = 只拒绝最差的）
+    min_quality_score=0.4,        # 兼容字段，实际路由以 DataQualityTier 统一判定
     min_query_length=10,          # 最小 query 长度
     min_answer_length=100,        # 最小 answer 长度
     require_repo_url=True,        # 必须有仓库 URL

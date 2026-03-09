@@ -36,6 +36,9 @@ class DataRoutingEngine:
         """路由单个样本，返回数据质量等级"""
         if eval_result.overall_score == 0.0:
             eval_result.compute_overall_score()
+        else:
+            # 兼容手动注入 overall_score 的路径：确保 tier 与 score 同步
+            eval_result.apply_overall_score(eval_result.overall_score)
         
         self.route_data(eval_result)
         return eval_result.data_quality_tier.value
@@ -44,34 +47,32 @@ class DataRoutingEngine:
         """
         根据评估结果路由数据
         
-        路由规则:
-        - score > 0.9  → Gold   → positive_samples.jsonl
-        - score > 0.6  → Silver → positive_samples.jsonl  
-        - score > 0.4  → Bronze → negative_samples.jsonl
-        - score <= 0.4 → Rejected (不应到达此处，在 auto_eval 中已过滤)
+        路由规则（统一使用 DataQualityTier.from_score）:
+        - GOLD / SILVER  → positive_samples.jsonl
+        - BRONZE         → negative_samples.jsonl
+        - REJECTED       → 不写入 SFT 文件
         
         注意: eval_results.jsonl 记录所有通过验证的样本，用于分析和审计
         """
         # 记录所有评估结果（完整审计日志）
         self._append_jsonl(self.eval_results_file, eval_result.to_dict())
         
+        # 统一 score -> tier 映射，避免路由阈值与模型阈值漂移
+        eval_result.apply_overall_score(eval_result.overall_score)
+        tier = eval_result.data_quality_tier
+
         # 根据质量分级路由到不同的 SFT 数据文件
-        if eval_result.overall_score > 0.9:
+        if tier in {DataQualityTier.GOLD, DataQualityTier.SILVER}:
             # Gold: 高质量正样本
             sft_sample = self._build_sft_sample(eval_result)
             self._append_jsonl(self.positive_samples_file, sft_sample)
-        
-        elif eval_result.overall_score > 0.6:
-            # Silver: 可用正样本
-            sft_sample = self._build_sft_sample(eval_result)
-            self._append_jsonl(self.positive_samples_file, sft_sample)
-        
-        elif eval_result.overall_score > 0.4:
+
+        elif tier == DataQualityTier.BRONZE:
             # Bronze: 负样本，可用于 DPO 或人工修正
             sft_sample = self._build_sft_sample(eval_result, negative=True)
             self._append_jsonl(self.negative_samples_file, sft_sample)
-        
-        # <= 0.4: 不写入任何 SFT 文件（已在 auto_eval 中被拒绝）
+
+        # REJECTED: 不写入任何 SFT 文件
     
     def _build_sft_sample(self, eval_result: EvaluationResult, negative: bool = False) -> Dict:
         """

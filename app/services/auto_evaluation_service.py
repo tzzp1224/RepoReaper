@@ -32,18 +32,18 @@ class EvaluationConfig:
     """
     自动评估配置
     
-    数据路由阈值说明（与 data_router.py 一致）:
+    数据路由阈值说明（统一由 DataQualityTier.from_score 判定）:
     - score > 0.9  → Gold   → positive_samples.jsonl
-    - score > 0.6  → Silver → positive_samples.jsonl  
-    - score > 0.4  → Bronze → negative_samples.jsonl
-    - score <= 0.4 → Rejected → 不存储
+    - score > 0.7  → Silver → positive_samples.jsonl
+    - score > 0.5  → Bronze → negative_samples.jsonl
+    - score <= 0.5 → Rejected → 不存储
     """
     enabled: bool = True                    # 是否启用自动评估
     use_ragas: bool = False                 # 是否使用 Ragas 进行 sanity check
     custom_weight: float = 0.7              # custom_eval 的权重
     ragas_weight: float = 0.3               # ragas_eval 的权重
     diff_threshold: float = 0.2             # 差异阈值（超过则标记 needs_review）
-    min_quality_score: float = 0.4          # 最低质量分数（<=0.4 才拒绝）
+    min_quality_score: float = 0.4          # 兼容字段，最终路由以 DataQualityTier 判定为准
     async_evaluation: bool = True           # 是否异步执行（推荐 True）
     min_query_length: int = 10              # 最小 query 长度
     min_answer_length: int = 100            # 最小 answer 长度
@@ -167,6 +167,9 @@ class AutoEvaluationService:
         Returns:
             质量等级 (gold/silver/bronze/rejected/needs_review) 或 None
         """
+        if not self.config.enabled:
+            return None
+
         # 输入验证
         is_valid, skip_reason = self._validate_input(
             query, retrieved_context, generated_answer, session_id, repo_url
@@ -240,13 +243,12 @@ class AutoEvaluationService:
             )
             
             # 设置综合得分
-            eval_result.overall_score = final_score
+            eval_result.apply_overall_score(final_score)
             
             # 根据状态和得分确定质量等级
             print(f"  [DEBUG] quality_status={quality_status}, final_score={final_score:.3f}, threshold={self.config.min_quality_score}")
             
             if quality_status == "needs_review":
-                eval_result.data_quality_tier = DataQualityTier.BRONZE
                 eval_result.notes += " | needs_review=true"
                 # 加入审查队列
                 self.needs_review_queue.append({
@@ -254,19 +256,18 @@ class AutoEvaluationService:
                     "custom_score": custom_score,
                     "ragas_score": ragas_score,
                     "diff": abs(custom_score - (ragas_score or custom_score)),
-                    "timestamp": start_time.isoformat()
+                    "timestamp": start_time.isoformat(),
+                    "routed": True,
                 })
                 print(f"  ⚠️ 需要人工审查 (needs_review)，暂存队列")
                 # 同时也路由到数据存储，便于后续分析
                 self.data_router.route_sample(eval_result)
-            elif final_score > self.config.min_quality_score:
-                # score > 0.4: 路由到 positive (>0.6) 或 negative (0.4-0.6)
-                print(f"  ✓ 路由到 data_router (score {final_score:.2f} > {self.config.min_quality_score})")
+            elif eval_result.data_quality_tier != DataQualityTier.REJECTED:
+                # 统一由 DataQualityTier 判定，避免阈值漂移
+                print(f"  ✓ 路由到 data_router (tier={eval_result.data_quality_tier.value}, score={final_score:.2f})")
                 self.data_router.route_sample(eval_result)
             else:
-                # score <= 0.4: 质量太差，直接拒绝
-                eval_result.data_quality_tier = DataQualityTier.REJECTED
-                print(f"  ❌ 评分过低 ({final_score:.2f} <= {self.config.min_quality_score})，拒绝存储")
+                print(f"  ❌ 评分过低 (tier=rejected, score={final_score:.2f})，拒绝存储")
             
             # 记录到 tracing
             tracing_service.add_event("auto_evaluation_completed", {
@@ -302,6 +303,9 @@ class AutoEvaluationService:
         
         在后台执行评估，不等待结果
         """
+        if not self.config.enabled:
+            return
+
         if not self.config.async_evaluation:
             # 同步模式（不推荐在生产环境）
             await self.auto_evaluate(
@@ -445,9 +449,10 @@ class AutoEvaluationService:
     def approve_sample(self, index: int) -> None:
         """人工批准某个样本"""
         if 0 <= index < len(self.needs_review_queue):
-            item = self.needs_review_queue[index]
-            # 直接存储到评估结果
-            self.data_router.route_sample(item["eval_result"])
+            item = self.needs_review_queue.pop(index)
+            # needs_review 分支默认已路由，这里仅在未路由时执行补路由
+            if not item.get("routed", False):
+                self.data_router.route_sample(item["eval_result"])
             print(f"✅ 样本 {index} 已批准")
     
     def reject_sample(self, index: int) -> None:

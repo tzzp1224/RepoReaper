@@ -27,6 +27,20 @@ class DataQualityTier(Enum):
     REJECTED = "rejected"  # 拒绝 (score < 0.5)
     CORRECTED = "corrected"  # 自纠正后的样本 (用于DPO)
 
+    @classmethod
+    def from_score(cls, score: float) -> "DataQualityTier":
+        """
+        根据综合分数统一判定质量等级。
+        这是全局唯一的 score -> tier 映射入口，避免阈值漂移。
+        """
+        if score > 0.9:
+            return cls.GOLD
+        if score > 0.7:
+            return cls.SILVER
+        if score > 0.5:
+            return cls.BRONZE
+        return cls.REJECTED
+
 
 # ============================================================================
 # 各层评估指标
@@ -175,6 +189,15 @@ class EvaluationResult:
     # 元数据
     error_message: Optional[str] = None
     notes: str = ""
+
+    def apply_overall_score(self, score: float) -> float:
+        """
+        应用综合分数并同步衍生字段（tier / sft_ready）。
+        """
+        self.overall_score = max(0.0, min(1.0, score))
+        self.data_quality_tier = DataQualityTier.from_score(self.overall_score)
+        self.sft_ready = self.data_quality_tier in {DataQualityTier.GOLD, DataQualityTier.SILVER}
+        return self.overall_score
     
     def compute_overall_score(self) -> float:
         """计算加权综合得分"""
@@ -200,21 +223,8 @@ class EvaluationResult:
             return 0.0
         
         total_weight = sum(weights)
-        self.overall_score = sum(s * w for s, w in zip(scores, weights)) / total_weight
-        
-        # 分级
-        if self.overall_score > 0.9:
-            self.data_quality_tier = DataQualityTier.GOLD
-            self.sft_ready = True
-        elif self.overall_score > 0.7:
-            self.data_quality_tier = DataQualityTier.SILVER
-            self.sft_ready = True
-        elif self.overall_score > 0.5:
-            self.data_quality_tier = DataQualityTier.BRONZE
-        else:
-            self.data_quality_tier = DataQualityTier.REJECTED
-        
-        return self.overall_score
+        computed_score = sum(s * w for s, w in zip(scores, weights)) / total_weight
+        return self.apply_overall_score(computed_score)
     
     def to_dict(self) -> Dict:
         """转换为字典供存储"""
@@ -233,12 +243,20 @@ class EvaluationResult:
         }
         
         if self.query_rewrite_metrics:
-            result["query_rewrite"] = asdict(self.query_rewrite_metrics)
+            query_rewrite = asdict(self.query_rewrite_metrics)
+            query_rewrite["overall_score"] = self.query_rewrite_metrics.overall_score()
+            result["query_rewrite"] = query_rewrite
         if self.retrieval_metrics:
-            result["retrieval"] = asdict(self.retrieval_metrics)
+            retrieval = asdict(self.retrieval_metrics)
+            retrieval["overall_score"] = self.retrieval_metrics.overall_score()
+            result["retrieval"] = retrieval
         if self.generation_metrics:
-            result["generation"] = asdict(self.generation_metrics)
+            generation = asdict(self.generation_metrics)
+            generation["overall_score"] = self.generation_metrics.overall_score()
+            result["generation"] = generation
         if self.agentic_metrics:
-            result["agentic"] = asdict(self.agentic_metrics)
+            agentic = asdict(self.agentic_metrics)
+            agentic["overall_score"] = self.agentic_metrics.overall_score()
+            result["agentic"] = agentic
         
         return result
