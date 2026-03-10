@@ -19,6 +19,7 @@ Date: 2025-01-27
 import time
 import json
 import os
+import sys
 from typing import Dict, Any, Optional, List, Callable
 from functools import wraps
 from datetime import datetime
@@ -32,17 +33,37 @@ from dataclasses import dataclass
 LANGFUSE_IMPORT_ERROR = None
 _LANGFUSE_ENABLED_ENV = os.getenv("LANGFUSE_ENABLED", "true").strip().lower()
 _LANGFUSE_ENABLED = _LANGFUSE_ENABLED_ENV not in {"0", "false", "no", "off"}
+# 检查Python版本兼容性
+PYTHON_VERSION = sys.version_info[:2]
+LANGFUSE_PYTHON_SUPPORTED = PYTHON_VERSION < (3, 14)
+LANGFUSE_DISABLED_REASON = None
 
 if _LANGFUSE_ENABLED:
-    try:
-        from langfuse import Langfuse
-        from langfuse.decorators import observe, langfuse_context
-        LANGFUSE_AVAILABLE = True
-    except Exception as e:
-        LANGFUSE_IMPORT_ERROR = e
+    # 版本门控
+    if LANGFUSE_PYTHON_SUPPORTED:
+        try:
+            from langfuse import Langfuse
+            # 导包失败，原因不明，由于代码中其他位置未使用observe和langfuse_context装饰器，因此暂时不处理这些装饰器的导入问题
+            # from langfuse.decorators import observe, langfuse_context
+            LANGFUSE_AVAILABLE = True
+        except ModuleNotFoundError as e:
+            LANGFUSE_IMPORT_ERROR = e
+            if e.name=="langfuse":
+                LANGFUSE_DISABLED_REASON = f"⚠️ Langfuse not installed. Install with: pip install langfuse. Falling back to local logging."
+            else:
+                LANGFUSE_DISABLED_REASON = f"⚠️ Langfuse import failed: {e}. Falling back to local logging."
+            LANGFUSE_AVAILABLE = False
+        except Exception as e:
+            LANGFUSE_IMPORT_ERROR = e
+            LANGFUSE_DISABLED_REASON = f"⚠️ Langfuse import failed: {e}. Falling back to local logging."
+            LANGFUSE_AVAILABLE = False
+
+    else:
         LANGFUSE_AVAILABLE = False
+        LANGFUSE_DISABLED_REASON = f"⚠️ Langfuse disabled on Python 3.14+ due to SDK compatibility issues, but current version is {PYTHON_VERSION[0]}.{PYTHON_VERSION[1]}. Falling back to local logging."
 else:
     LANGFUSE_AVAILABLE = False
+    LANGFUSE_DISABLED_REASON = "⚠️ Langfuse disabled by LANGFUSE_ENABLED. Falling back to local logging."
 
 
 @dataclass
@@ -71,7 +92,11 @@ class TracingService:
         
         if self.config.enabled and self.config.backend == "langfuse":
             if not LANGFUSE_AVAILABLE:
-                print("⚠️ Langfuse not installed. Install with: pip install langfuse. Falling back to local logging.")
+                # 打印门控提示信息
+                if LANGFUSE_DISABLED_REASON:
+                    print(LANGFUSE_DISABLED_REASON)
+                else:
+                    print("⚠️ Langfuse unavailable. Falling back to local logging.")
                 self.config.backend = "local"
             else:
                 try:
@@ -79,7 +104,9 @@ class TracingService:
                         host=self.config.langfuse_host,
                         public_key=self.config.langfuse_public_key,
                         secret_key=self.config.langfuse_secret_key,
-                        enabled=True,
+                        # 报错 Langfuse.__init__() got an unexpected keyword argument enabled'.
+                        # 暂时不处理该参数确保langfuse可用
+                        # enabled=True,
                         debug=False
                     )
                     print("✅ Langfuse client initialized successfully")
@@ -480,7 +507,9 @@ def traced(operation_name: str, capture_args: List[str] = None):
 
 tracing_config = TracingConfig(
     enabled=True,
-    backend="langfuse" if LANGFUSE_AVAILABLE else "local"
+    # backend="langfuse" if LANGFUSE_AVAILABLE else "local"
+    # 改为用户是否启用langfuse
+    backend="langfuse" if _LANGFUSE_ENABLED else "local",
 )
 
 tracing_service = TracingService(config=tracing_config)
