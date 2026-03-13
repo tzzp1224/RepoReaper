@@ -63,6 +63,12 @@ services:
       - SILICON_API_KEY=${SILICON_API_KEY}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
 
+      # Langfuse 追踪配置
+      - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-http://langfuse-web:3000}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-} 
+
  
     volumes:
       - app_data:/app/data

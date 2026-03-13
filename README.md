@@ -122,7 +122,8 @@ cp .env.example .env
 
 # Langfuse configuration：
 # LANGFUSE_ENABLED=true
-# LANGFUSE_HOST=http://langfuse-web:3000
+# LANGFUSE_HOST=http://langfuse-web:3000  #if you run RepoReaper in docker
+# LANGFUSE_HOST=http://localhost:3000  #if you run RepoReaper locally
 # LANGFUSE_PUBLIC_KEY=<your public key>
 # LANGFUSE_SECRET_KEY=<your secret key>
 
@@ -151,10 +152,9 @@ cp .env.example .env
 # Set QDRANT_MODE=server and QDRANT_URL=http://qdrant:6333 in .env
 docker compose up -d --build
 ```
-**Docker Compose(Qdrant Server, Langfuse):**
+**Using Langfuse:**
 ```bash
-cp .env.example .env
-docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
+docker compose -f docker-compose.observability.yml up -d --build
 ```
 
 

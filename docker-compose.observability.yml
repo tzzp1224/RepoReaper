@@ -4,13 +4,6 @@
 # All other components are bound to localhost (127.0.0.1) to only accept connections from the local machine.
 # External connections from other machines will not be able to reach these services directly.
 services:
-  app:
-    environment:
-      # Langfuse 追踪配置
-      - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
-      - LANGFUSE_HOST=${LANGFUSE_HOST:-http://langfuse-web:3000}
-      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
-      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-} 
 
   langfuse-worker:
     image: docker.io/langfuse/langfuse-worker:3

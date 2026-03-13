@@ -122,7 +122,8 @@ cp .env.example .env
 
 # 如果使用Langfuse请配置：
 # LANGFUSE_ENABLED=true
-# LANGFUSE_HOST=http://langfuse-web:3000
+# LANGFUSE_HOST=http://langfuse-web:3000  #若RepoReaper在Docker内运行
+# LANGFUSE_HOST=http://localhost:3000  #若RepoReaper在本地运行
 # LANGFUSE_PUBLIC_KEY=<你的 public key>
 # LANGFUSE_SECRET_KEY=<你的 secret key>
 
@@ -151,10 +152,9 @@ cp .env.example .env
 # 在 .env 中设置 QDRANT_MODE=server 与 QDRANT_URL=http://qdrant:6333
 docker compose up -d --build
 ```
-**Docker Compose(Qdrant Server, Langfuse):**
+**使用Langfuse**
 ```bash
-cp .env.example .env
-docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
+docker compose -f docker-compose.observability.yml up -d --build
 ```
 ---
 
