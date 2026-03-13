@@ -26,9 +26,9 @@ services:
         reservations:
           memory: 256M
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
-      interval: 30s
-      timeout: 10s
+      test: bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1
+      interval: 5s
+      timeout: 5s
       retries: 3
 
   # ============================================================
@@ -62,6 +62,8 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - SILICON_API_KEY=${SILICON_API_KEY}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
+
+ 
     volumes:
       - app_data:/app/data
       - app_logs:/app/logs

@@ -120,6 +120,12 @@ cp .env.example .env
 # Required: set LLM_PROVIDER and the matching *_API_KEY
 # Recommended: GITHUB_TOKEN and SILICON_API_KEY (embeddings)
 
+# Langfuse configuration：
+# LANGFUSE_ENABLED=true
+# LANGFUSE_HOST=http://langfuse-web:3000
+# LANGFUSE_PUBLIC_KEY=<your public key>
+# LANGFUSE_SECRET_KEY=<your secret key>
+
 # (Optional) Build frontend (repo already contains frontend-dist)
 cd frontend-vue
 npm install
@@ -144,6 +150,11 @@ docker run -d -p 8000:8000 --env-file .env reporeaper
 cp .env.example .env
 # Set QDRANT_MODE=server and QDRANT_URL=http://qdrant:6333 in .env
 docker compose up -d --build
+```
+**Docker Compose(Qdrant Server, Langfuse):**
+```bash
+cp .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
 ```
 
 

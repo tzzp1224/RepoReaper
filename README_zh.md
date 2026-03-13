@@ -120,6 +120,12 @@ cp .env.example .env
 # 必需：设置 LLM_PROVIDER 以及对应的 *_API_KEY
 # 推荐：GITHUB_TOKEN 和 SILICON_API_KEY（Embedding）
 
+# 如果使用Langfuse请配置：
+# LANGFUSE_ENABLED=true
+# LANGFUSE_HOST=http://langfuse-web:3000
+# LANGFUSE_PUBLIC_KEY=<你的 public key>
+# LANGFUSE_SECRET_KEY=<你的 secret key>
+
 # （可选）构建前端（仓库已包含 frontend-dist）
 cd frontend-vue
 npm install
@@ -145,7 +151,11 @@ cp .env.example .env
 # 在 .env 中设置 QDRANT_MODE=server 与 QDRANT_URL=http://qdrant:6333
 docker compose up -d --build
 ```
-
+**Docker Compose(Qdrant Server, Langfuse):**
+```bash
+cp .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
+```
 ---
 
 ## 📊 评估与追踪现状
@@ -190,7 +200,7 @@ docker compose up -d --build
 
 ## 🗺 路线图
 
-- [ ] **修复 Langfuse 兼容性** — 固定 `langfuse`/`pydantic` 版本或按 Python 版本门控导入
+- [√] **修复 Langfuse 兼容性** — 固定 `langfuse`/`pydantic` 版本或按 Python 版本门控导入
 - [ ] **`docker-compose.yml` 加入 Langfuse** — 一键启动本地可观测平台
 - [ ] **串联 trace_id** — 让 Langfuse UI 展示完整链路树
 - [ ] **正式接入 Ragas** — 更新 `_ragas_eval()` 使用 `ragas.evaluate(Dataset(...))`，新增独立评估脚本
