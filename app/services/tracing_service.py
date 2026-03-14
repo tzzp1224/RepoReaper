@@ -109,6 +109,7 @@ class TracingService:
                         # enabled=True,
                         debug=False
                     )
+                    self._log_langfuse_capabilities()
                     print("✅ Langfuse client initialized successfully")
                 except Exception as e:
                     print(f"⚠️ Langfuse initialization failed: {e}. Falling back to local logging.")
@@ -116,6 +117,46 @@ class TracingService:
         
         # 创建本地日志目录
         os.makedirs(self.config.local_log_dir, exist_ok=True)
+
+    def _log_langfuse_capabilities(self) -> None:
+        """打印当前 Langfuse 客户端能力，便于排查 SDK 版本差异。"""
+        if not self.langfuse_client:
+            return
+        capabilities = {
+            "trace": hasattr(self.langfuse_client, "trace"),
+            "span": hasattr(self.langfuse_client, "span"),
+            "event": hasattr(self.langfuse_client, "event"),
+            "generation": hasattr(self.langfuse_client, "generation"),
+            "create_event": hasattr(self.langfuse_client, "create_event"),
+            "start_span": hasattr(self.langfuse_client, "start_span"),
+            "start_generation": hasattr(self.langfuse_client, "start_generation"),
+        }
+        print(f"🔎 Langfuse capabilities: {capabilities}")
+
+    def _emit_event_compat(self, name: str, input_data: Any, output_data: Any, metadata: Dict) -> None:
+        """兼容不同 SDK 版本的事件上报 API。"""
+        if not self.langfuse_client:
+            return
+
+        if hasattr(self.langfuse_client, "event"):
+            self.langfuse_client.event(
+                name=name,
+                input=input_data,
+                output=output_data,
+                metadata=metadata or {}
+            )
+            return
+
+        if hasattr(self.langfuse_client, "create_event"):
+            self.langfuse_client.create_event(
+                name=name,
+                input=input_data,
+                output=output_data,
+                metadata=metadata or {}
+            )
+            return
+
+        raise AttributeError("Langfuse client has neither event() nor create_event()")
     
     def start_trace(self, trace_name: str, session_id: str, metadata: Dict = None) -> str:
         """启动一个新的追踪链"""
@@ -124,12 +165,23 @@ class TracingService:
         self.current_trace_id = trace_id
         
         if self.langfuse_client:
-            self.langfuse_client.trace(
-                name=trace_name,
-                input=metadata or {},
-                session_id=session_id
-            )
-            print(f"📍 Trace started: {trace_id}")
+            try:
+                if hasattr(self.langfuse_client, "trace"):
+                    self.langfuse_client.trace(
+                        name=trace_name,
+                        input=metadata or {},
+                        session_id=session_id
+                    )
+                else:
+                    self._emit_event_compat(
+                        name=f"trace_start:{trace_name}",
+                        input_data=metadata or {},
+                        output_data={"trace_id": trace_id},
+                        metadata={"session_id": session_id, "trace_name": trace_name}
+                    )
+                print(f"📍 Trace started: {trace_id}")
+            except Exception as e:
+                print(f"⚠️ Failed to start trace in Langfuse: {e}")
         else:
             self._log_locally("trace_start", {
                 "trace_id": trace_id,
@@ -165,17 +217,26 @@ class TracingService:
         if self.langfuse_client:
             try:
                 # Langfuse:记录到云端
-                self.langfuse_client.span(
-                    name=span_name,
-                    input=input_data,
-                    output=output_data,
-                    metadata={
-                        "operation": operation,
-                        "latency_ms": latency_ms,
-                        **(token_usage or {}),
-                        **(metadata or {})
-                    }
-                )
+                span_metadata = {
+                    "operation": operation,
+                    "latency_ms": latency_ms,
+                    **(token_usage or {}),
+                    **(metadata or {})
+                }
+                if hasattr(self.langfuse_client, "span"):
+                    self.langfuse_client.span(
+                        name=span_name,
+                        input=input_data,
+                        output=output_data,
+                        metadata=span_metadata
+                    )
+                else:
+                    self._emit_event_compat(
+                        name=f"span:{span_name}",
+                        input_data=input_data,
+                        output_data=output_data,
+                        metadata=span_metadata
+                    )
             except Exception as e:
                 print(f"⚠️ Failed to record span to Langfuse: {e}")
         
@@ -205,10 +266,10 @@ class TracingService:
         
         if self.langfuse_client:
             try:
-                self.langfuse_client.event(
+                self._emit_event_compat(
                     name=f"tool_call:{tool_name}",
-                    input=parameters,
-                    output=result,
+                    input_data=parameters,
+                    output_data=result,
                     metadata={
                         "latency_ms": latency_ms,
                         "success": success,
@@ -242,10 +303,10 @@ class TracingService:
         
         if self.langfuse_client:
             try:
-                self.langfuse_client.event(
+                self._emit_event_compat(
                     name="retrieval_debug",
-                    input={"query": query},
-                    output={"files": retrieved_files},
+                    input_data={"query": query},
+                    output_data={"files": retrieved_files},
                     metadata=retrieval_record
                 )
             except Exception as e:
@@ -306,23 +367,39 @@ class TracingService:
         
         if self.langfuse_client:
             try:
-                self.langfuse_client.generation(
-                    name="llm_generation",
-                    model=model,
-                    input=prompt_messages,
-                    output=generated_text[:1000] if generated_text else "",
-                    usage={
-                        "prompt_tokens": prompt_tokens or 0,
-                        "completion_tokens": completion_tokens or 0,
-                        "total_tokens": total_tokens or 0
-                    },
-                    metadata={
-                        "ttft_ms": ttft_ms,
-                        "total_latency_ms": total_latency_ms,
-                        "is_streaming": is_streaming,
-                        **(metadata or {})
-                    }
-                )
+                gen_metadata = {
+                    "ttft_ms": ttft_ms,
+                    "total_latency_ms": total_latency_ms,
+                    "is_streaming": is_streaming,
+                    **(metadata or {})
+                }
+                if hasattr(self.langfuse_client, "generation"):
+                    self.langfuse_client.generation(
+                        name="llm_generation",
+                        model=model,
+                        input=prompt_messages,
+                        output=generated_text[:1000] if generated_text else "",
+                        usage={
+                            "prompt_tokens": prompt_tokens or 0,
+                            "completion_tokens": completion_tokens or 0,
+                            "total_tokens": total_tokens or 0
+                        },
+                        metadata=gen_metadata
+                    )
+                else:
+                    self._emit_event_compat(
+                        name="llm_generation",
+                        input_data={"model": model, "messages": prompt_messages},
+                        output_data={
+                            "text": generated_text[:1000] if generated_text else "",
+                            "usage": {
+                                "prompt_tokens": prompt_tokens or 0,
+                                "completion_tokens": completion_tokens or 0,
+                                "total_tokens": total_tokens or 0
+                            }
+                        },
+                        metadata=gen_metadata
+                    )
             except Exception as e:
                 print(f"⚠️ Failed to record LLM generation to Langfuse: {e}")
         
@@ -347,10 +424,10 @@ class TracingService:
         
         if self.langfuse_client:
             try:
-                self.langfuse_client.event(
+                self._emit_event_compat(
                     name="ttft",
-                    input={},
-                    output={"ttft_ms": ttft_ms},
+                    input_data={},
+                    output_data={"ttft_ms": ttft_ms},
                     metadata=ttft_record
                 )
             except Exception as e:
@@ -374,10 +451,10 @@ class TracingService:
         
         if self.langfuse_client:
             try:
-                self.langfuse_client.event(
+                self._emit_event_compat(
                     name=event_name,
-                    input={},
-                    output=event_data or {},
+                    input_data={},
+                    output_data=event_data or {},
                     metadata=event_data or {}
                 )
             except Exception as e:
