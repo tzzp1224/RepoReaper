@@ -26,7 +26,7 @@ services:
         reservations:
           memory: 256M
     healthcheck:
-      test: bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
       interval: 5s
       timeout: 5s
       retries: 3
