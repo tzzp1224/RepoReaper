@@ -14,7 +14,6 @@ import json
 import os
 import re
 from typing import List, Dict, Any
-from datetime import datetime
 
 # 重新导出所有模型（保持向后兼容）
 from evaluation.models import (
@@ -37,23 +36,15 @@ class EvaluationEngine:
     """评估引擎 - 负责多层面打分"""
     
     def __init__(
-        self, 
-        llm_client=None, 
-        golden_dataset_path: str = "evaluation/golden_dataset.json",
-        model_name: str = None
+        self,
+        llm_client=None,
+        model_name: str = None,
+        golden_dataset_path: str = None,
     ):
         self.llm_client = llm_client
         self.model_name = model_name or "gpt-4o-mini"  # 默认使用轻量模型
-        self.golden_dataset = self._load_golden_dataset(golden_dataset_path)
-    
-    def _load_golden_dataset(self, path: str) -> List[Dict]:
-        """加载黄金数据集"""
-        if not os.path.exists(path):
-            print(f"⚠️ Golden dataset not found at {path}")
-            return []
-        
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        # 兼容旧参数，在线运行时不再预加载黄金数据集。
+        self.golden_dataset_path = golden_dataset_path
     
     async def evaluate_query_rewrite(
         self,

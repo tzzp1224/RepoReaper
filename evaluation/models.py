@@ -10,6 +10,10 @@ from typing import List, Dict, Optional, Any
 from enum import Enum
 from datetime import datetime
 
+GOLD_MIN_SCORE = 0.9
+SILVER_MIN_SCORE = 0.7
+BRONZE_MIN_SCORE = 0.5
+
 
 class EvaluationLayer(Enum):
     """评估层次分类"""
@@ -21,11 +25,10 @@ class EvaluationLayer(Enum):
 
 class DataQualityTier(Enum):
     """数据质量分级 (用于SFT数据路由)"""
-    GOLD = "gold"          # 完美样本 (score > 0.9)
-    SILVER = "silver"      # 优质样本 (score 0.7-0.9)
-    BRONZE = "bronze"      # 可用样本 (score 0.5-0.7)
-    REJECTED = "rejected"  # 拒绝 (score < 0.5)
-    CORRECTED = "corrected"  # 自纠正后的样本 (用于DPO)
+    GOLD = "gold"          # 完美样本
+    SILVER = "silver"      # 优质样本
+    BRONZE = "bronze"      # 可用样本
+    REJECTED = "rejected"  # 拒绝样本
 
     @classmethod
     def from_score(cls, score: float) -> "DataQualityTier":
@@ -33,13 +36,27 @@ class DataQualityTier(Enum):
         根据综合分数统一判定质量等级。
         这是全局唯一的 score -> tier 映射入口，避免阈值漂移。
         """
-        if score > 0.9:
+        if score >= GOLD_MIN_SCORE:
             return cls.GOLD
-        if score > 0.7:
+        if score >= SILVER_MIN_SCORE:
             return cls.SILVER
-        if score > 0.5:
+        if score >= BRONZE_MIN_SCORE:
             return cls.BRONZE
         return cls.REJECTED
+
+    @classmethod
+    def min_score_for(cls, tier: "DataQualityTier") -> float:
+        """
+        返回指定质量等级的分数下界。
+        用于对齐离线清洗阈值与在线路由阈值。
+        """
+        mapping = {
+            cls.GOLD: GOLD_MIN_SCORE,
+            cls.SILVER: SILVER_MIN_SCORE,
+            cls.BRONZE: BRONZE_MIN_SCORE,
+            cls.REJECTED: 0.0,
+        }
+        return mapping[tier]
 
 
 # ============================================================================
@@ -184,7 +201,6 @@ class EvaluationResult:
     
     # SFT标注
     sft_ready: bool = False
-    dpo_candidate: bool = False
     
     # 元数据
     error_message: Optional[str] = None
@@ -237,7 +253,6 @@ class EvaluationResult:
             "overall_score": self.overall_score,
             "data_quality_tier": self.data_quality_tier.value,
             "sft_ready": self.sft_ready,
-            "dpo_candidate": self.dpo_candidate,
             "error_message": self.error_message,
             "notes": self.notes,
         }

@@ -64,6 +64,20 @@ def test_data_quality_tier_single_source_routing(tmp_path):
     assert _line_count(router.negative_samples_file) == 1
 
 
+def test_data_quality_tier_boundaries_are_canonical():
+    assert DataQualityTier.from_score(0.9) == DataQualityTier.GOLD
+    assert DataQualityTier.from_score(0.7) == DataQualityTier.SILVER
+    assert DataQualityTier.from_score(0.5) == DataQualityTier.BRONZE
+    assert DataQualityTier.from_score(0.49) == DataQualityTier.REJECTED
+    assert DataQualityTier.min_score_for(DataQualityTier.SILVER) == 0.7
+
+
+def test_data_router_statistics_no_dpo_placeholder(tmp_path):
+    router = DataRoutingEngine(output_dir=str(tmp_path))
+    stats = router.get_statistics()
+    assert set(stats.keys()) == {"positive", "negative"}
+
+
 def test_evaluation_result_to_dict_includes_layer_overall_scores():
     query_rewrite = QueryRewriteMetrics(
         original_query="auth flow",
@@ -114,6 +128,7 @@ def test_evaluation_result_to_dict_includes_layer_overall_scores():
     assert payload["retrieval"]["overall_score"] == pytest.approx(retrieval.overall_score())
     assert payload["generation"]["overall_score"] == pytest.approx(generation.overall_score())
     assert payload["agentic"]["overall_score"] == pytest.approx(agentic.overall_score())
+    assert "dpo_candidate" not in payload
 
 
 def test_layer_performance_reads_serialized_layer_scores(tmp_path):

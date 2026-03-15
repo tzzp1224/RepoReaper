@@ -177,7 +177,7 @@ docker compose -f docker-compose.observability.yml up -d --build
 | **Offline Retrieval Benchmark** | ⚠️ Partial | Script works, but depends on pre-indexed vector store and limited golden labels |
 | **Golden Dataset Quality** | ❌ Incomplete | 26 samples, mostly no `expected_answer`, all English |
 | **Ragas Integration** | ⚠️ Experimental | Sampling/timeout/circuit exists; `_ragas_eval()` still uses outdated dict input |
-| **DPO Path** | ⚠️ Placeholder | `CORRECTED` tier and `dpo_pairs.jsonl` are defined but not used in runtime |
+| **Runtime Contract Cleanup** | ✅ Completed | Runtime path is generation-focused; dead eval imports/DPO runtime placeholders removed, canonical score-tier thresholds centralized, dedupe eviction deterministic, startup no longer preloads golden dataset, Langfuse score path uses deterministic `create_score` fallback and graceful tracing shutdown |
 
 > Current state: the production online eval loop is available, while offline benchmark quality and data governance are the main gaps.
 
@@ -198,8 +198,8 @@ docker compose -f docker-compose.observability.yml up -d --build
 4. **Ragas `_ragas_eval()` uses outdated API**  
    Current implementation passes a plain dict to `ragas.evaluate()`. Latest SDK expects a dataset object path.
 
-5. **Thresholds are defined in multiple places**  
-   Runtime thresholds, routing tiers, and cleaning thresholds are not yet unified under one source of truth.
+5. **Review API uses index-based operations**  
+   `approve/reject` currently depend on queue index, which is fragile under concurrent operations.
 
 ---
 
@@ -208,7 +208,7 @@ docker compose -f docker-compose.observability.yml up -d --build
 - [x] **Phase 0 - Async sidecar + quality gate**: non-blocking auto-eval, queue backpressure, input filtering, review-before-route.
 - [x] **Phase 1 - Trace continuity**: `/chat` + `/analyze` + worker trace propagation with fail-open tracing.
 - [x] **Phase 2 - Score observability**: Langfuse Scores reporting for `final/custom/ragas(optional)/quality_tier`.
-- [ ] **Phase 3 - Contract cleanup (required first)**: keep online runtime focused on generation eval only, move or remove unused runtime artifacts (DPO placeholders, dead imports, unused runtime symbols), and define one canonical threshold map; DoD: runtime path has no dead eval symbols.
+- [x] **Phase 3 - Contract cleanup (required first)**: keep online runtime focused on generation eval only, move or remove unused runtime artifacts (DPO placeholders, dead imports, unused runtime symbols), and define one canonical threshold map; DoD: runtime path has no dead eval symbols.
 - [ ] **Phase 4 - Ragas modernization**: migrate `_ragas_eval()` to current Dataset-based API, keep sampling+timeout+CB, and add deterministic tests for success/timeout/error; DoD: no deprecated API usage.
 - [ ] **Phase 5 - Durable review workflow**: replace index-based approve/reject with stable `sample_id`, persist pending review queue, make approve/reject idempotent; DoD: restart-safe review state.
 - [ ] **Phase 6 - Golden dataset governance**: split retrieval vs generation benchmark sets, add reference answers and multilingual coverage, enforce validator checks in CI; DoD: benchmark set is complete enough for regression.

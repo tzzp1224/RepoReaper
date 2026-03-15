@@ -102,6 +102,10 @@ class TracingService:
                 else:
                     print("⚠️ Langfuse unavailable. Falling back to local logging.")
                 self.config.backend = "local"
+            elif not self.config.langfuse_public_key or not self.config.langfuse_secret_key:
+                # 显式 key 校验，避免“初始化成功但实际被 SDK 禁用”的假阳性状态。
+                print("⚠️ Langfuse keys missing. Falling back to local logging.")
+                self.config.backend = "local"
             else:
                 try:
                     self.langfuse_client = Langfuse(
@@ -657,20 +661,6 @@ class TracingService:
             try:
                 score_metadata = self._with_trace_metadata(metadata)
 
-                # 优先绑定当前 trace，保证在 trace_scope 中自动关联。
-                if trace_id is None and observation_id is None and effective_trace_id:
-                    _, called = self._invoke_langfuse(
-                        "score_current_trace",
-                        name=score_name,
-                        value=value,
-                        data_type=data_type,
-                        comment=comment,
-                        metadata=score_metadata,
-                    )
-                    if called:
-                        self._log_locally("score", score_record)
-                        return
-
                 _, called = self._invoke_langfuse(
                     "create_score",
                     name=score_name,
@@ -682,6 +672,16 @@ class TracingService:
                     session_id=effective_session_id,
                     observation_id=observation_id,
                 )
+                # create_score 不可用时，兼容极老 SDK 的 score_current_trace。
+                if (not called) and (trace_id is None) and (observation_id is None) and effective_trace_id:
+                    _, called = self._invoke_langfuse(
+                        "score_current_trace",
+                        name=score_name,
+                        value=value,
+                        data_type=data_type,
+                        comment=comment,
+                        metadata=score_metadata,
+                    )
                 if not called:
                     raise AttributeError("Langfuse client has no compatible score API")
             except Exception as e:
@@ -746,6 +746,28 @@ class TracingService:
             pass
 
         return f"{self.config.langfuse_host}/traces/{effective_trace_id}"
+
+    def shutdown(self) -> None:
+        """刷新并关闭 Langfuse 客户端（失败不影响主流程）。"""
+        if not self.langfuse_client:
+            return
+        try:
+            _, called = self._invoke_langfuse("flush")
+            if not called:
+                flush_fn = getattr(self.langfuse_client, "flush", None)
+                if callable(flush_fn):
+                    flush_fn()
+        except Exception as e:
+            print(f"⚠️ Failed to flush Langfuse client: {e}")
+
+        try:
+            _, called = self._invoke_langfuse("shutdown")
+            if not called:
+                close_fn = getattr(self.langfuse_client, "close", None)
+                if callable(close_fn):
+                    close_fn()
+        except Exception as e:
+            print(f"⚠️ Failed to shutdown Langfuse client: {e}")
 
 
 # ============================================================================

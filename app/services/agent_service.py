@@ -15,7 +15,6 @@ from app.services.github_service import get_repo_structure, get_file_content
 from app.services.vector_service import store_manager
 from app.services.chunking_service import UniversalChunker, ChunkingConfig
 from app.services.tracing_service import tracing_service
-from evaluation.evaluation_framework import EvaluationEngine, EvaluationResult, DataRoutingEngine
 
 # === Helper: 鲁棒的 JSON 提取 ===
 def extract_json_from_text(text):

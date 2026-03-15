@@ -1,5 +1,6 @@
 import asyncio
 import os
+import hashlib
 from datetime import datetime
 
 from evaluation.data_router import DataRoutingEngine
@@ -166,6 +167,23 @@ def test_queue_full_drop_is_recorded(tmp_path, monkeypatch):
     metrics = service.get_metrics()
     assert metrics["enqueued"] == 1
     assert metrics["dropped_queue_full"] == 1
+
+
+def test_duplicate_cache_eviction_is_deterministic(tmp_path, monkeypatch):
+    service, _, _ = _build_service(
+        tmp_path,
+        monkeypatch,
+        config_kwargs={"visualize_only": True, "async_evaluation": False},
+    )
+
+    for i in range(1001):
+        is_dup = service._check_duplicate(query=f"query-{i}", session_id="sid-evict")
+        assert is_dup is False
+
+    # 超过阈值后应裁剪为 500，且最早 key 已淘汰。
+    assert len(service._evaluated_keys) == 500
+    first_key = "sid-evict:" + hashlib.md5("query-0".encode()).hexdigest()[:8]
+    assert first_key not in service._evaluated_keys
 
 
 def test_queue_worker_preserves_trace_context(tmp_path, monkeypatch):

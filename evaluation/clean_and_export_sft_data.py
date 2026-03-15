@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Dict, List, Tuple
 from pathlib import Path
 
+from evaluation.models import DataQualityTier
 from evaluation.utils import is_chatty_query, has_code_indicators
 
 
@@ -28,7 +29,7 @@ from evaluation.utils import is_chatty_query, has_code_indicators
 class CleaningConfig:
     """数据清洗配置"""
     # 质量阈值
-    MIN_OVERALL_SCORE = 0.7          # 最低综合分
+    MIN_OVERALL_SCORE = DataQualityTier.min_score_for(DataQualityTier.SILVER)  # 统一阈值来源
     MIN_FAITHFULNESS = 0.6           # 最低 faithfulness
     MIN_ANSWER_RELEVANCE = 0.6       # 最低 answer_relevance
     
@@ -166,7 +167,7 @@ def clean_and_export(
         "passed": 0,
         "rejected": 0,
         "rejection_reasons": {},
-        "quality_distribution": {"gold": 0, "silver": 0, "bronze": 0}
+        "quality_distribution": {"gold": 0, "silver": 0, "bronze": 0, "rejected": 0}
     }
     
     # 输出文件
@@ -206,12 +207,9 @@ def clean_and_export(
                     
                     # 统计质量分布
                     score = sample.get("overall_score", 0)
-                    if score > 0.9:
-                        stats["quality_distribution"]["gold"] += 1
-                    elif score > 0.7:
-                        stats["quality_distribution"]["silver"] += 1
-                    else:
-                        stats["quality_distribution"]["bronze"] += 1
+                    tier = DataQualityTier.from_score(score).value
+                    if tier in stats["quality_distribution"]:
+                        stats["quality_distribution"][tier] += 1
                 else:
                     rejected_samples.append({
                         "reason": reason,
@@ -249,9 +247,9 @@ def clean_and_export(
     print(f"拒绝:   {stats['rejected']} ({stats['rejected']/max(stats['total_read'],1)*100:.1f}%)")
     print()
     print("质量分布:")
-    print(f"  🥇 Gold (>0.9):   {stats['quality_distribution']['gold']}")
-    print(f"  🥈 Silver (>0.7): {stats['quality_distribution']['silver']}")
-    print(f"  🥉 Bronze (>0.5): {stats['quality_distribution']['bronze']}")
+    print(f"  🥇 Gold (>=0.9):   {stats['quality_distribution']['gold']}")
+    print(f"  🥈 Silver (>=0.7): {stats['quality_distribution']['silver']}")
+    print(f"  🥉 Bronze (>=0.5): {stats['quality_distribution']['bronze']}")
     print()
     
     if stats["rejection_reasons"]:

@@ -18,6 +18,7 @@ import time
 from datetime import datetime
 from typing import Optional, Dict, Any
 from dataclasses import asdict, dataclass, field, replace
+from collections import OrderedDict
 
 from evaluation.evaluation_framework import (
     EvaluationEngine,
@@ -77,7 +78,7 @@ class AutoEvaluationService:
         self.data_router = data_router
         self.config = config or replace(default_auto_eval_config)
         self.needs_review_queue: list = []  # 需要人工审查的样本队列
-        self._evaluated_keys: set = set()   # 防重复评估（session_id:query_hash）
+        self._evaluated_keys: OrderedDict[str, None] = OrderedDict()  # 防重复评估（session_id:query_hash）
         self._metrics = AutoEvalRuntimeMetrics()
 
         self._eval_queue: Optional[asyncio.Queue] = None
@@ -202,11 +203,12 @@ class AutoEvaluationService:
         if eval_key in self._evaluated_keys:
             return True
 
-        self._evaluated_keys.add(eval_key)
+        self._evaluated_keys[eval_key] = None
 
         # 限制缓存大小，防止内存泄漏
         if len(self._evaluated_keys) > 1000:
-            self._evaluated_keys = set(list(self._evaluated_keys)[-500:])
+            while len(self._evaluated_keys) > 500:
+                self._evaluated_keys.popitem(last=False)
 
         return False
 

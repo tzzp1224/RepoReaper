@@ -29,7 +29,6 @@ class DataRoutingEngine:
         
         self.positive_samples_file = os.path.join(output_dir, "positive_samples.jsonl")
         self.negative_samples_file = os.path.join(output_dir, "negative_samples.jsonl")
-        self.dpo_pairs_file = os.path.join(output_dir, "dpo_pairs.jsonl")
         self.eval_results_file = os.path.join(output_dir, "eval_results.jsonl")
     
     def route_sample(self, eval_result: EvaluationResult) -> str:
@@ -68,7 +67,7 @@ class DataRoutingEngine:
             self._append_jsonl(self.positive_samples_file, sft_sample)
 
         elif tier == DataQualityTier.BRONZE:
-            # Bronze: 负样本，可用于 DPO 或人工修正
+            # Bronze: 低质量但可分析样本
             sft_sample = self._build_sft_sample(eval_result, negative=True)
             self._append_jsonl(self.negative_samples_file, sft_sample)
 
@@ -154,7 +153,6 @@ class DataRoutingEngine:
         for name, filepath in [
             ("positive", self.positive_samples_file),
             ("negative", self.negative_samples_file),
-            ("dpo_pairs", self.dpo_pairs_file),
         ]:
             if os.path.exists(filepath):
                 with open(filepath, 'r', encoding='utf-8') as f:
@@ -165,7 +163,7 @@ class DataRoutingEngine:
     
     def get_distribution(self) -> Dict[str, int]:
         """获取评估结果的质量分布"""
-        distribution = {"gold": 0, "silver": 0, "bronze": 0, "rejected": 0, "corrected": 0}
+        distribution = {"gold": 0, "silver": 0, "bronze": 0, "rejected": 0}
         
         if not os.path.exists(self.eval_results_file):
             return distribution

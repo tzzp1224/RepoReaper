@@ -174,7 +174,7 @@ docker compose -f docker-compose.observability.yml up -d --build
 | **离线检索评估** | ⚠️ 部分完成 | 脚本可跑，但依赖已索引向量库且黄金集标注不足 |
 | **黄金数据集质量** | ❌ 不完整 | 26 条样本，`expected_answer` 基本为空，且全英文 |
 | **Ragas 集成** | ⚠️ 实验态 | 已有抽样/超时/熔断，但 `_ragas_eval()` 仍使用旧接口 |
-| **DPO 路径** | ⚠️ 占位 | `CORRECTED` 分级与 `dpo_pairs.jsonl` 目前未进入运行时链路 |
+| **运行时合同收敛** | ✅ 已完成 | 在线运行路径已聚焦 generation 评估；死评估导入与运行时 DPO 占位已移除，score-tier 阈值统一，去重缓存确定性淘汰，启动不再预加载黄金集，Langfuse score 上报改为确定性 `create_score` 路径并支持优雅 shutdown |
 
 > 当前结论：线上评估闭环可用；离线基准质量、数据治理与持久化能力是下一阶段重点。
 
@@ -195,8 +195,8 @@ docker compose -f docker-compose.observability.yml up -d --build
 4. **Ragas `_ragas_eval()` API 过时**  
    当前实现向 `ragas.evaluate()` 传递 dict；新版 SDK 需要 Dataset 路径。
 
-5. **阈值定义分散**  
-   运行时评估阈值、路由分级阈值、离线清洗阈值尚未统一为单一真值来源。
+5. **审核 API 仍为索引操作**  
+   `approve/reject` 依赖队列 index，在并发下不稳定。
 
 ---
 
@@ -205,7 +205,7 @@ docker compose -f docker-compose.observability.yml up -d --build
 - [√] **Phase 0 - 异步 sidecar + 质量闸门**：主链路非阻塞、队列背压、输入过滤、审批后落盘。
 - [√] **Phase 1 - Trace 全链路串联**：`/chat`、`/analyze`、worker trace 透传，tracing fail-open。
 - [√] **Phase 2 - 分数可观测**：Langfuse Scores 上报 `final/custom/ragas(可选)/quality_tier`。
-- [ ] **Phase 3 - 合同收敛与清理（优先级最高）**：在线链路只保留 generation 评估，迁移或删除运行时无用评估资产（DPO 占位、无用导入、无效符号），并统一阈值真值来源；DoD：运行时无死代码。
+- [√] **Phase 3 - 合同收敛与清理（优先级最高）**：在线链路只保留 generation 评估，迁移或删除运行时无用评估资产（DPO 占位、无用导入、无效符号），并统一阈值真值来源；DoD：运行时无死代码。
 - [ ] **Phase 4 - Ragas 现代化**：`_ragas_eval()` 升级为 Dataset API，保留抽样+超时+熔断，并补齐确定性测试；DoD：不再使用旧 API。
 - [ ] **Phase 5 - 审核流持久化**：approve/reject 从 index 改为稳定 `sample_id`，待审队列持久化且操作幂等；DoD：重启不丢审核状态。
 - [ ] **Phase 6 - 黄金集治理**：拆分检索/生成基准集，补齐参考答案与多语言覆盖，在 CI 做完整性校验；DoD：可作为回归基准。

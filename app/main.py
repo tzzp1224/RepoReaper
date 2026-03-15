@@ -26,7 +26,6 @@ from app.services.auto_evaluation_service import (
 from app.services.tracing_service import tracing_service
 from evaluation.evaluation_framework import EvaluationEngine, EvaluationResult, DataRoutingEngine
 from datetime import datetime
-import uuid
 
 settings.validate()
 
@@ -56,6 +55,9 @@ async def lifespan(app: FastAPI):
     auto_eval_service = get_auto_evaluation_service()
     if auto_eval_service:
         await auto_eval_service.shutdown()
+
+    # 刷新并关闭 tracing 客户端（fail-open）
+    tracing_service.shutdown()
     
     # 关闭共享的 Qdrant 客户端
     from app.storage.qdrant_store import close_shared_client
@@ -549,7 +551,6 @@ async def quality_distribution():
                 "silver": distribution.get("silver", 0),
                 "bronze": distribution.get("bronze", 0),
                 "rejected": distribution.get("rejected", 0),
-                "corrected": distribution.get("corrected", 0)
             },
             "timestamp": datetime.now().isoformat()
         }
