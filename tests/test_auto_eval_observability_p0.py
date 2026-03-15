@@ -33,6 +33,7 @@ def _build_service(tmp_path, monkeypatch, config_kwargs=None, ragas_impl=None, s
     import app.services.auto_evaluation_service as auto_eval_module
 
     monkeypatch.setattr(auto_eval_module.tracing_service, "add_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auto_eval_module.tracing_service, "record_score", lambda *args, **kwargs: None)
 
     class FakeEvalEngine:
         def __init__(self):
@@ -210,6 +211,42 @@ def test_queue_worker_preserves_trace_context(tmp_path, monkeypatch):
     asyncio.run(_run())
 
     assert captured == [("trace-ctx-1", "sid-ctx-1", "sid-ctx-1")]
+
+
+def test_auto_eval_reports_scores_to_langfuse(tmp_path, monkeypatch):
+    service, _, _ = _build_service(
+        tmp_path,
+        monkeypatch,
+        config_kwargs={"visualize_only": True, "async_evaluation": False},
+    )
+
+    import app.services.auto_evaluation_service as auto_eval_module
+
+    calls = []
+
+    def _record_score(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(auto_eval_module.tracing_service, "record_score", _record_score)
+
+    asyncio.run(
+        service.auto_evaluate(
+            query="how auth works",
+            retrieved_context="def login(): pass",
+            generated_answer="A" * 180,
+            session_id="sid-score",
+            repo_url="https://github.com/a/b",
+        )
+    )
+
+    score_names = [kwargs["score_name"] for _, kwargs in calls]
+    assert "auto_eval.final_score" in score_names
+    assert "auto_eval.custom_score" in score_names
+    assert "auto_eval.quality_tier" in score_names
+
+    quality_tier_calls = [kwargs for _, kwargs in calls if kwargs["score_name"] == "auto_eval.quality_tier"]
+    assert len(quality_tier_calls) == 1
+    assert quality_tier_calls[0]["data_type"] == "CATEGORICAL"
 
 
 def test_ragas_sampling_zero_skips_ragas_call(tmp_path, monkeypatch):

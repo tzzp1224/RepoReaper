@@ -168,16 +168,15 @@ docker compose -f docker-compose.observability.yml up -d --build
 
 | 组件 | 状态 | 说明 |
 |:----|:----:|:----|
-| **自研评估引擎** | ✅ 可用 | 四层指标（QueryRewrite / Retrieval / Generation / Agentic），LLM-as-Judge 判分 |
-| **在线自动评估** | ✅ 可用 | 每次 `/chat` 结束后异步触发，结果写入 `evaluation/sft_data/` |
-| **数据路由 (SFT)** | ✅ 可用 | 按评分自动分流 Gold/Silver/Bronze/Rejected → JSONL 文件 |
-| **评估 API** | ✅ 可用 | `/evaluate`、`/evaluation/stats`、`/dashboard/*`、`/auto-eval/*` 共 7 个端点 |
-| **离线检索评估** | ✅ 可用 | `test_retrieval.py` — Hit Rate、Recall@K、Precision@K、MRR |
-| **Langfuse 追踪** | ✅ 可用 | `/analyze` + `/chat` 已形成完整 trace，sidecar 评估 worker 可继承 `trace_id`；不可用时自动降级为本地日志 `logs/traces/` |
-| **Ragas 集成** | ⚠️ 实验态 | 默认 `use_ragas=False`；`_ragas_eval()` 仍需按新版 SDK 做工程化重构 |
-| **Langfuse ↔ 评估** | ⚠️ 部分打通 | 评估生命周期事件已进入 trace；Scores/Datasets API 仍未同步 |
+| **在线自动评估主链路** | ✅ 可用 | `/chat` → sidecar 异步评估 → 质量分级路由 |
+| **人工审核闸门** | ✅ 可用 | `needs_review` 审批后才落盘，具备 approve/reject API |
+| **Langfuse 可观测** | ✅ 可用 | 全链路 trace + 分数上报（`final/custom/ragas/tier`） |
+| **离线检索评估** | ⚠️ 部分完成 | 脚本可跑，但依赖已索引向量库且黄金集标注不足 |
+| **黄金数据集质量** | ❌ 不完整 | 26 条样本，`expected_answer` 基本为空，且全英文 |
+| **Ragas 集成** | ⚠️ 实验态 | 已有抽样/超时/熔断，但 `_ragas_eval()` 仍使用旧接口 |
+| **DPO 路径** | ⚠️ 占位 | `CORRECTED` 分级与 `dpo_pairs.jsonl` 目前未进入运行时链路 |
 
-> **综合完成度约 80%**：自研评估链路与 Langfuse trace 已可用；主要剩余工作在 Ragas 工程化与评分同步。
+> 当前结论：线上评估闭环可用；离线基准质量、数据治理与持久化能力是下一阶段重点。
 
 ---
 
@@ -190,30 +189,28 @@ docker compose -f docker-compose.observability.yml up -d --build
 2. **`docker-compose.yml` 未包含 Langfuse 服务**  
    即使导入成功，仍需运行中的 Langfuse 实例。请自行添加或使用 [app.langfuse.com](https://app.langfuse.com)。
 
-3. **Langfuse Scores/Datasets API 尚未接入**  
-   当前评估仍以 JSONL 落盘为主（`evaluation/sft_data/`）。trace 已关联，但质量分数尚未写入 Langfuse score 对象。
+3. **审核队列与去重缓存仅内存态**  
+   `needs_review_queue` 与 `_evaluated_keys` 都是进程内结构，服务重启会丢失状态。
 
 4. **Ragas `_ragas_eval()` API 过时**  
-   当前向 `ragas.evaluate()` 传递 dict，最新 Ragas 要求 `Dataset` 对象。已导出 `ragas_eval_dataset.json` 但无脚本消费它。
+   当前实现向 `ragas.evaluate()` 传递 dict；新版 SDK 需要 Dataset 路径。
 
-5. **黄金数据集缺少标准答案**  
-   26 条测试用例的 `expected_answer` 均为空，无法做生成质量的 ground truth 对比。
-
-6. **启发式降级较粗糙**  
-   无 LLM client 时，`faithfulness` 用关键词重叠 + 0.2 基础分；`completeness` 纯粹按字数判断。
+5. **阈值定义分散**  
+   运行时评估阈值、路由分级阈值、离线清洗阈值尚未统一为单一真值来源。
 
 ---
 
-## 🗺 路线图
+## 🗺 评估 Roadmap（唯一基线）
 
-- [√] **修复 Langfuse 兼容性** — 固定 `langfuse`/`pydantic` 版本或按 Python 版本门控导入
-- [ ] **`docker-compose.yml` 加入 Langfuse** — 一键启动本地可观测平台
-- [√] **串联 trace_id** — 让 Langfuse UI 展示完整链路树
-- [ ] **正式接入 Ragas** — 更新 `_ragas_eval()` 使用 `ragas.evaluate(Dataset(...))`，新增独立评估脚本
-- [ ] **丰富黄金数据集** — 补充 `expected_answer`，扩展至 50+ 条用例
-- [ ] **评估仪表盘前端** — Vue 组件可视化质量分布与 Bad Case
-- [ ] **CI 回归基线** — 在 GitHub Actions 中运行 `test_retrieval.py`，指标回退时失败
-- [ ] **对接 Langfuse Datasets** — 将评估结果推送到 Langfuse Scores/Datasets API，统一可观测
+- [√] **Phase 0 - 异步 sidecar + 质量闸门**：主链路非阻塞、队列背压、输入过滤、审批后落盘。
+- [√] **Phase 1 - Trace 全链路串联**：`/chat`、`/analyze`、worker trace 透传，tracing fail-open。
+- [√] **Phase 2 - 分数可观测**：Langfuse Scores 上报 `final/custom/ragas(可选)/quality_tier`。
+- [ ] **Phase 3 - 合同收敛与清理（优先级最高）**：在线链路只保留 generation 评估，迁移或删除运行时无用评估资产（DPO 占位、无用导入、无效符号），并统一阈值真值来源；DoD：运行时无死代码。
+- [ ] **Phase 4 - Ragas 现代化**：`_ragas_eval()` 升级为 Dataset API，保留抽样+超时+熔断，并补齐确定性测试；DoD：不再使用旧 API。
+- [ ] **Phase 5 - 审核流持久化**：approve/reject 从 index 改为稳定 `sample_id`，待审队列持久化且操作幂等；DoD：重启不丢审核状态。
+- [ ] **Phase 6 - 黄金集治理**：拆分检索/生成基准集，补齐参考答案与多语言覆盖，在 CI 做完整性校验；DoD：可作为回归基准。
+- [ ] **Phase 7 - CI 回归闸门**：接入离线评估命令与阈值门禁，PR 指标回退自动失败；DoD：有稳定机器可读报告。
+- [ ] **Phase 8 - Langfuse Dataset 同步**：审批通过样本实现 JSONL + Langfuse Dataset 双写一致；DoD：无双写漂移。
 
 ---
 

@@ -149,6 +149,7 @@ def test_auto_eval_respects_enabled_flag(tmp_path, monkeypatch):
     from app.services.auto_evaluation_service import AutoEvaluationService, EvaluationConfig
 
     monkeypatch.setattr(auto_eval_module.tracing_service, "add_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auto_eval_module.tracing_service, "record_score", lambda *args, **kwargs: None)
 
     class FakeEvalEngine:
         called = 0
@@ -196,6 +197,7 @@ def test_needs_review_is_routed_only_after_approve(tmp_path, monkeypatch):
     from app.services.auto_evaluation_service import AutoEvaluationService, EvaluationConfig
 
     monkeypatch.setattr(auto_eval_module.tracing_service, "add_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auto_eval_module.tracing_service, "record_score", lambda *args, **kwargs: None)
 
     class FakeEvalEngine:
         async def evaluate_generation(self, **kwargs):
@@ -258,6 +260,7 @@ def test_needs_review_reject_does_not_route(tmp_path, monkeypatch):
     from app.services.auto_evaluation_service import AutoEvaluationService, EvaluationConfig
 
     monkeypatch.setattr(auto_eval_module.tracing_service, "add_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auto_eval_module.tracing_service, "record_score", lambda *args, **kwargs: None)
 
     class FakeEvalEngine:
         async def evaluate_generation(self, **kwargs):

@@ -132,6 +132,8 @@ class TracingService:
             "event": hasattr(self.langfuse_client, "event"),
             "generation": hasattr(self.langfuse_client, "generation"),
             "create_event": hasattr(self.langfuse_client, "create_event"),
+            "create_score": hasattr(self.langfuse_client, "create_score"),
+            "score_current_trace": hasattr(self.langfuse_client, "score_current_trace"),
             "start_span": hasattr(self.langfuse_client, "start_span"),
             "start_generation": hasattr(self.langfuse_client, "start_generation"),
             "start_observation": hasattr(self.langfuse_client, "start_observation"),
@@ -623,6 +625,69 @@ class TracingService:
                 print(f"⚠️ Failed to record TTFT: {e}")
         
         self._log_locally("ttft", ttft_record)
+
+    def record_score(
+        self,
+        score_name: str,
+        value: Any,
+        data_type: str = "NUMERIC",
+        comment: str = None,
+        metadata: Dict[str, Any] = None,
+        trace_id: str = None,
+        session_id: str = None,
+        observation_id: str = None,
+    ) -> None:
+        """记录评估分数到 Langfuse（失败自动降级）。"""
+        effective_trace_id = trace_id or self.get_current_trace_id()
+        effective_session_id = session_id or self.get_current_session_id()
+
+        score_record = {
+            "score_name": score_name,
+            "value": value,
+            "data_type": data_type,
+            "comment": comment,
+            "trace_id": effective_trace_id,
+            "session_id": effective_session_id,
+            "observation_id": observation_id,
+            "timestamp": datetime.now().isoformat(),
+            "metadata": self._with_trace_metadata(metadata),
+        }
+
+        if self.langfuse_client:
+            try:
+                score_metadata = self._with_trace_metadata(metadata)
+
+                # 优先绑定当前 trace，保证在 trace_scope 中自动关联。
+                if trace_id is None and observation_id is None and effective_trace_id:
+                    _, called = self._invoke_langfuse(
+                        "score_current_trace",
+                        name=score_name,
+                        value=value,
+                        data_type=data_type,
+                        comment=comment,
+                        metadata=score_metadata,
+                    )
+                    if called:
+                        self._log_locally("score", score_record)
+                        return
+
+                _, called = self._invoke_langfuse(
+                    "create_score",
+                    name=score_name,
+                    value=value,
+                    data_type=data_type,
+                    comment=comment,
+                    metadata=score_metadata,
+                    trace_id=effective_trace_id,
+                    session_id=effective_session_id,
+                    observation_id=observation_id,
+                )
+                if not called:
+                    raise AttributeError("Langfuse client has no compatible score API")
+            except Exception as e:
+                print(f"⚠️ Failed to record score '{score_name}': {e}")
+
+        self._log_locally("score", score_record)
 
     def add_event(self, event_name: str, event_data: Dict[str, Any] = None) -> None:
         """

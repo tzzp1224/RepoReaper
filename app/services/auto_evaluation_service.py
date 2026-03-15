@@ -101,6 +101,25 @@ class AutoEvaluationService:
         except Exception as e:
             print(f"  ⚠️ [AutoEval] tracing failed for {event_name}: {e}")
 
+    def _safe_record_score(
+        self,
+        name: str,
+        value: float | str,
+        *,
+        data_type: str = "NUMERIC",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Langfuse score 上报必须 fail-open。"""
+        try:
+            tracing_service.record_score(
+                score_name=name,
+                value=value,
+                data_type=data_type,
+                metadata=metadata,
+            )
+        except Exception as e:
+            print(f"  ⚠️ [AutoEval] tracing score failed for {name}: {e}")
+
     def _record_skipped(
         self,
         reason: str,
@@ -423,6 +442,37 @@ class AutoEvaluationService:
                     self.data_router.route_sample(eval_result)
                 else:
                     print(f"  ❌ 评分过低 (tier=rejected, score={final_score:.2f})，拒绝存储")
+
+            score_metadata = {
+                "session_id": session_id,
+                "repo_url": repo_url,
+                "query": query[:100],
+                "quality_status": quality_status,
+                "quality_tier": eval_result.data_quality_tier.value,
+                "visualize_only": self.config.visualize_only,
+            }
+            self._safe_record_score(
+                "auto_eval.final_score",
+                round(float(final_score), 6),
+                metadata=score_metadata,
+            )
+            self._safe_record_score(
+                "auto_eval.custom_score",
+                round(float(custom_score), 6),
+                metadata=score_metadata,
+            )
+            if ragas_score is not None:
+                self._safe_record_score(
+                    "auto_eval.ragas_score",
+                    round(float(ragas_score), 6),
+                    metadata=score_metadata,
+                )
+            self._safe_record_score(
+                "auto_eval.quality_tier",
+                eval_result.data_quality_tier.value,
+                data_type="CATEGORICAL",
+                metadata=score_metadata,
+            )
 
             self._safe_add_event(
                 "auto_evaluation_completed",

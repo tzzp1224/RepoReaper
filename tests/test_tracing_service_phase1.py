@@ -77,3 +77,54 @@ def test_start_trace_and_end_trace_manage_context(tmp_path):
     service.end_trace({"done": True})
     assert service.get_current_trace_id() is None
     assert service.get_current_session_id() is None
+
+
+def test_record_score_uses_create_score_with_trace_context(tmp_path):
+    service = _build_service(tmp_path)
+
+    class FakeLangfuseClient:
+        def __init__(self):
+            self.calls = []
+
+        def create_score(
+            self,
+            *,
+            name,
+            value,
+            session_id=None,
+            trace_id=None,
+            observation_id=None,
+            data_type=None,
+            comment=None,
+            metadata=None,
+        ):
+            self.calls.append(
+                {
+                    "name": name,
+                    "value": value,
+                    "session_id": session_id,
+                    "trace_id": trace_id,
+                    "observation_id": observation_id,
+                    "data_type": data_type,
+                    "comment": comment,
+                    "metadata": metadata,
+                }
+            )
+
+    client = FakeLangfuseClient()
+    service.langfuse_client = client
+
+    with service.trace_scope("trace-score", session_id="session-score"):
+        service.record_score(
+            score_name="auto_eval.final_score",
+            value=0.88,
+            metadata={"source": "unit_test"},
+        )
+
+    assert len(client.calls) == 1
+    payload = client.calls[0]
+    assert payload["name"] == "auto_eval.final_score"
+    assert payload["trace_id"] == "trace-score"
+    assert payload["session_id"] == "session-score"
+    assert payload["data_type"] == "NUMERIC"
+    assert payload["metadata"]["source"] == "unit_test"
