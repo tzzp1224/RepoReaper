@@ -20,7 +20,10 @@ import time
 import json
 import os
 import sys
+import inspect
 from typing import Dict, Any, Optional, List, Callable
+from contextvars import ContextVar
+from contextlib import contextmanager
 from functools import wraps
 from datetime import datetime
 from dataclasses import dataclass
@@ -43,8 +46,6 @@ if _LANGFUSE_ENABLED:
     if LANGFUSE_PYTHON_SUPPORTED:
         try:
             from langfuse import Langfuse
-            # 导包失败，原因不明，由于代码中其他位置未使用observe和langfuse_context装饰器，因此暂时不处理这些装饰器的导入问题
-            # from langfuse.decorators import observe, langfuse_context
             LANGFUSE_AVAILABLE = True
         except ModuleNotFoundError as e:
             LANGFUSE_IMPORT_ERROR = e
@@ -64,6 +65,9 @@ if _LANGFUSE_ENABLED:
 else:
     LANGFUSE_AVAILABLE = False
     LANGFUSE_DISABLED_REASON = "⚠️ Langfuse disabled by LANGFUSE_ENABLED. Falling back to local logging."
+
+_TRACE_ID_CTX: ContextVar[Optional[str]] = ContextVar("langfuse_trace_id", default=None)
+_SESSION_ID_CTX: ContextVar[Optional[str]] = ContextVar("langfuse_session_id", default=None)
 
 
 @dataclass
@@ -130,54 +134,180 @@ class TracingService:
             "create_event": hasattr(self.langfuse_client, "create_event"),
             "start_span": hasattr(self.langfuse_client, "start_span"),
             "start_generation": hasattr(self.langfuse_client, "start_generation"),
+            "start_observation": hasattr(self.langfuse_client, "start_observation"),
+            "create_trace_id": hasattr(self.langfuse_client, "create_trace_id"),
         }
         print(f"🔎 Langfuse capabilities: {capabilities}")
+
+    def get_current_trace_id(self) -> Optional[str]:
+        """获取当前上下文中的 trace_id。"""
+        return _TRACE_ID_CTX.get()
+
+    def get_current_session_id(self) -> Optional[str]:
+        """获取当前上下文中的 session_id。"""
+        return _SESSION_ID_CTX.get()
+
+    def _set_trace_context(self, trace_id: Optional[str], session_id: Optional[str] = None) -> None:
+        """设置当前上下文的 trace/session。"""
+        _TRACE_ID_CTX.set(trace_id)
+        _SESSION_ID_CTX.set(session_id)
+        self.current_trace_id = trace_id
+
+    def clear_trace_context(self) -> None:
+        """清空当前上下文的 trace/session。"""
+        self._set_trace_context(None, None)
+
+    @contextmanager
+    def trace_scope(self, trace_id: Optional[str], session_id: Optional[str] = None):
+        """临时绑定 trace/session 上下文，退出时自动恢复。"""
+        trace_token = _TRACE_ID_CTX.set(trace_id)
+        session_token = _SESSION_ID_CTX.set(session_id)
+        self.current_trace_id = trace_id
+        try:
+            yield
+        finally:
+            _TRACE_ID_CTX.reset(trace_token)
+            _SESSION_ID_CTX.reset(session_token)
+            self.current_trace_id = _TRACE_ID_CTX.get()
+
+    def _trace_context_payload(self) -> Optional[Dict[str, str]]:
+        """构建 Langfuse trace_context。"""
+        trace_id = self.get_current_trace_id()
+        if not trace_id:
+            return None
+        return {"trace_id": trace_id}
+
+    def _with_trace_metadata(self, metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """将 trace/session 信息补充到 metadata。"""
+        payload = dict(metadata or {})
+        trace_id = self.get_current_trace_id()
+        session_id = self.get_current_session_id()
+        if trace_id and "trace_id" not in payload:
+            payload["trace_id"] = trace_id
+        if session_id and "session_id" not in payload:
+            payload["session_id"] = session_id
+        return payload
+
+    def _invoke_langfuse(self, method_name: str, **kwargs):
+        """调用 Langfuse 方法并自动过滤不支持参数。"""
+        if not self.langfuse_client:
+            return None, False
+
+        method = getattr(self.langfuse_client, method_name, None)
+        if not callable(method):
+            return None, False
+
+        call_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        try:
+            signature = inspect.signature(method)
+            accepts_kwargs = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD
+                for p in signature.parameters.values()
+            )
+            if not accepts_kwargs:
+                call_kwargs = {
+                    k: v
+                    for k, v in call_kwargs.items()
+                    if k in signature.parameters
+                }
+        except (TypeError, ValueError):
+            pass
+
+        return method(**call_kwargs), True
+
+    @staticmethod
+    def _end_observation(observation: Any) -> None:
+        """结束 start_observation 返回的 observation。"""
+        if observation is None:
+            return
+        end_method = getattr(observation, "end", None)
+        if callable(end_method):
+            end_method()
 
     def _emit_event_compat(self, name: str, input_data: Any, output_data: Any, metadata: Dict) -> None:
         """兼容不同 SDK 版本的事件上报 API。"""
         if not self.langfuse_client:
             return
 
-        if hasattr(self.langfuse_client, "event"):
-            self.langfuse_client.event(
-                name=name,
-                input=input_data,
-                output=output_data,
-                metadata=metadata or {}
-            )
+        event_metadata = self._with_trace_metadata(metadata)
+        trace_context = self._trace_context_payload()
+        trace_id = self.get_current_trace_id()
+
+        _, called = self._invoke_langfuse(
+            "event",
+            name=name,
+            input=input_data,
+            output=output_data,
+            metadata=event_metadata,
+            trace_id=trace_id,
+            trace_context=trace_context,
+        )
+        if called:
             return
 
-        if hasattr(self.langfuse_client, "create_event"):
-            self.langfuse_client.create_event(
-                name=name,
-                input=input_data,
-                output=output_data,
-                metadata=metadata or {}
-            )
+        _, called = self._invoke_langfuse(
+            "create_event",
+            name=name,
+            input=input_data,
+            output=output_data,
+            metadata=event_metadata,
+            trace_context=trace_context,
+            trace_id=trace_id,
+        )
+        if called:
             return
 
-        raise AttributeError("Langfuse client has neither event() nor create_event()")
+        observation, called = self._invoke_langfuse(
+            "start_observation",
+            trace_context=trace_context,
+            name=name,
+            as_type="span",
+            input=input_data,
+            output=output_data,
+            metadata=event_metadata,
+        )
+        if called:
+            self._end_observation(observation)
+            return
+
+        raise AttributeError("Langfuse client has no compatible event API")
     
     def start_trace(self, trace_name: str, session_id: str, metadata: Dict = None) -> str:
         """启动一个新的追踪链"""
         import uuid
+
         trace_id = str(uuid.uuid4())
-        self.current_trace_id = trace_id
+        if self.langfuse_client:
+            try:
+                generated, called = self._invoke_langfuse("create_trace_id")
+                if called and generated:
+                    trace_id = str(generated)
+            except Exception:
+                pass
+
+        self._set_trace_context(trace_id=trace_id, session_id=session_id)
         
         if self.langfuse_client:
             try:
-                if hasattr(self.langfuse_client, "trace"):
-                    self.langfuse_client.trace(
-                        name=trace_name,
-                        input=metadata or {},
-                        session_id=session_id
-                    )
-                else:
+                trace_payload = self._with_trace_metadata(
+                    {"session_id": session_id, "trace_name": trace_name}
+                )
+
+                _, called = self._invoke_langfuse(
+                    "trace",
+                    id=trace_id,
+                    trace_id=trace_id,
+                    name=trace_name,
+                    input=metadata or {},
+                    metadata=trace_payload,
+                    session_id=session_id,
+                )
+                if not called:
                     self._emit_event_compat(
                         name=f"trace_start:{trace_name}",
                         input_data=metadata or {},
                         output_data={"trace_id": trace_id},
-                        metadata={"session_id": session_id, "trace_name": trace_name}
+                        metadata=trace_payload,
                     )
                 print(f"📍 Trace started: {trace_id}")
             except Exception as e:
@@ -192,6 +322,16 @@ class TracingService:
             })
         
         return trace_id
+
+    def end_trace(self, metadata: Dict[str, Any] = None) -> None:
+        """结束当前 trace 并清理上下文。"""
+        trace_id = self.get_current_trace_id()
+        if trace_id:
+            try:
+                self.add_event("trace_end", metadata or {})
+            except Exception as e:
+                print(f"⚠️ Failed to end trace cleanly: {e}")
+        self.clear_trace_context()
     
     def record_span(
         self,
@@ -211,7 +351,7 @@ class TracingService:
             "latency_ms": latency_ms,
             "timestamp": datetime.now().isoformat(),
             "token_usage": token_usage or {},
-            "metadata": metadata or {}
+            "metadata": self._with_trace_metadata(metadata)
         }
         
         if self.langfuse_client:
@@ -221,28 +361,45 @@ class TracingService:
                     "operation": operation,
                     "latency_ms": latency_ms,
                     **(token_usage or {}),
-                    **(metadata or {})
+                    **self._with_trace_metadata(metadata),
                 }
-                if hasattr(self.langfuse_client, "span"):
-                    self.langfuse_client.span(
+                trace_context = self._trace_context_payload()
+                trace_id = self.get_current_trace_id()
+
+                observation, called = self._invoke_langfuse(
+                    "start_observation",
+                    trace_context=trace_context,
+                    name=span_name,
+                    as_type="span",
+                    input=input_data,
+                    output=output_data,
+                    metadata=span_metadata,
+                )
+                if called:
+                    self._end_observation(observation)
+                else:
+                    _, span_called = self._invoke_langfuse(
+                        "span",
                         name=span_name,
                         input=input_data,
                         output=output_data,
-                        metadata=span_metadata
+                        metadata=span_metadata,
+                        trace_id=trace_id,
+                        trace_context=trace_context,
                     )
-                else:
-                    self._emit_event_compat(
-                        name=f"span:{span_name}",
-                        input_data=input_data,
-                        output_data=output_data,
-                        metadata=span_metadata
-                    )
+                    if not span_called:
+                        self._emit_event_compat(
+                            name=f"span:{span_name}",
+                            input_data=input_data,
+                            output_data=output_data,
+                            metadata=span_metadata
+                        )
             except Exception as e:
                 print(f"⚠️ Failed to record span to Langfuse: {e}")
         
         # 本地日志
         self._log_locally("span", span_record)
-    
+
     def record_tool_call(
         self,
         tool_name: str,
@@ -261,6 +418,8 @@ class TracingService:
             "latency_ms": latency_ms,
             "success": success,
             "error": error,
+            "trace_id": self.get_current_trace_id(),
+            "session_id": self.get_current_session_id(),
             "timestamp": datetime.now().isoformat()
         }
         
@@ -298,6 +457,8 @@ class TracingService:
             "vector_scores": vector_scores,
             "bm25_scores": bm25_scores,
             "latency_ms": latency_ms,
+            "trace_id": self.get_current_trace_id(),
+            "session_id": self.get_current_session_id(),
             "timestamp": datetime.now().isoformat()
         }
         
@@ -362,7 +523,9 @@ class TracingService:
                     if completion_tokens and total_latency_ms and total_latency_ms > 0 else None
             },
             "timestamp": datetime.now().isoformat(),
-            "metadata": metadata or {}
+            "trace_id": self.get_current_trace_id(),
+            "session_id": self.get_current_session_id(),
+            "metadata": self._with_trace_metadata(metadata),
         }
         
         if self.langfuse_client:
@@ -371,10 +534,32 @@ class TracingService:
                     "ttft_ms": ttft_ms,
                     "total_latency_ms": total_latency_ms,
                     "is_streaming": is_streaming,
-                    **(metadata or {})
+                    **self._with_trace_metadata(metadata),
                 }
-                if hasattr(self.langfuse_client, "generation"):
-                    self.langfuse_client.generation(
+                usage_details = {
+                    "input": prompt_tokens or 0,
+                    "output": completion_tokens or 0,
+                    "total": total_tokens or 0,
+                }
+                trace_context = self._trace_context_payload()
+                trace_id = self.get_current_trace_id()
+
+                observation, called = self._invoke_langfuse(
+                    "start_observation",
+                    trace_context=trace_context,
+                    name="llm_generation",
+                    as_type="generation",
+                    model=model,
+                    input=prompt_messages,
+                    output=generated_text[:1000] if generated_text else "",
+                    metadata=gen_metadata,
+                    usage_details=usage_details,
+                )
+                if called:
+                    self._end_observation(observation)
+                else:
+                    _, generation_called = self._invoke_langfuse(
+                        "generation",
                         name="llm_generation",
                         model=model,
                         input=prompt_messages,
@@ -384,22 +569,24 @@ class TracingService:
                             "completion_tokens": completion_tokens or 0,
                             "total_tokens": total_tokens or 0
                         },
-                        metadata=gen_metadata
+                        metadata=gen_metadata,
+                        trace_id=trace_id,
+                        trace_context=trace_context,
                     )
-                else:
-                    self._emit_event_compat(
-                        name="llm_generation",
-                        input_data={"model": model, "messages": prompt_messages},
-                        output_data={
-                            "text": generated_text[:1000] if generated_text else "",
-                            "usage": {
-                                "prompt_tokens": prompt_tokens or 0,
-                                "completion_tokens": completion_tokens or 0,
-                                "total_tokens": total_tokens or 0
-                            }
-                        },
-                        metadata=gen_metadata
-                    )
+                    if not generation_called:
+                        self._emit_event_compat(
+                            name="llm_generation",
+                            input_data={"model": model, "messages": prompt_messages},
+                            output_data={
+                                "text": generated_text[:1000] if generated_text else "",
+                                "usage": {
+                                    "prompt_tokens": prompt_tokens or 0,
+                                    "completion_tokens": completion_tokens or 0,
+                                    "total_tokens": total_tokens or 0
+                                }
+                            },
+                            metadata=gen_metadata
+                        )
             except Exception as e:
                 print(f"⚠️ Failed to record LLM generation to Langfuse: {e}")
         
@@ -418,8 +605,10 @@ class TracingService:
         ttft_record = {
             "ttft_ms": ttft_ms,
             "model": model,
+            "trace_id": self.get_current_trace_id(),
+            "session_id": self.get_current_session_id(),
             "timestamp": datetime.now().isoformat(),
-            "metadata": metadata or {}
+            "metadata": self._with_trace_metadata(metadata),
         }
         
         if self.langfuse_client:
@@ -446,6 +635,8 @@ class TracingService:
         event_record = {
             "event_name": event_name,
             "event_data": event_data or {},
+            "trace_id": self.get_current_trace_id(),
+            "session_id": self.get_current_session_id(),
             "timestamp": datetime.now().isoformat()
         }
         
@@ -455,7 +646,7 @@ class TracingService:
                     name=event_name,
                     input_data={},
                     output_data=event_data or {},
-                    metadata=event_data or {}
+                    metadata=self._with_trace_metadata(event_data)
                 )
             except Exception as e:
                 print(f"⚠️ Failed to record event '{event_name}': {e}")
@@ -475,11 +666,21 @@ class TracingService:
     
     def get_trace_url(self, trace_id: str = None) -> str:
         """获取Langfuse中该trace的URL (用于前端跳转)"""
-        if not self.langfuse_client or not trace_id:
+        if not self.langfuse_client:
             return None
-        
-        # Langfuse云端URL格式
-        return f"{self.config.langfuse_host}/traces/{trace_id}"
+
+        effective_trace_id = trace_id or self.get_current_trace_id()
+        if not effective_trace_id:
+            return None
+
+        try:
+            url, called = self._invoke_langfuse("get_trace_url", trace_id=effective_trace_id)
+            if called and url:
+                return str(url)
+        except Exception:
+            pass
+
+        return f"{self.config.langfuse_host}/traces/{effective_trace_id}"
 
 
 # ============================================================================

@@ -26,6 +26,23 @@ logs/
 # 临时文件
 *.tmp
 *.bak
+
+# Python 测试与覆盖率产物
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Markdown 草稿（保留项目 README）
+*.md
+!README.md
+!README_zh.md
+
 QUICKSTART.md
 docs/INTERVIEW_QA.md
 docs/ROADMAP.md

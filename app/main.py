@@ -23,6 +23,7 @@ from app.services.auto_evaluation_service import (
     init_auto_evaluation_service,
     get_auto_evaluation_service,
 )
+from app.services.tracing_service import tracing_service
 from evaluation.evaluation_framework import EvaluationEngine, EvaluationResult, DataRoutingEngine
 from datetime import datetime
 import uuid
@@ -222,54 +223,71 @@ async def chat(request: Request):
     if not session_id:
         return {"answer": "Session lost"}
 
+    trace_id = tracing_service.start_trace(
+        trace_name="chat_session",
+        session_id=session_id,
+        metadata={
+            "repo_url": repo_url,
+            "query_preview": user_query[:200],
+        },
+    )
+
     # 标记流是否完成
     stream_completed = False
     
     async def chat_stream_with_eval():
         """包装 process_chat_stream，流结束后触发评估"""
         nonlocal stream_completed
-        
         # 清除旧的评估数据
         clear_eval_data(session_id)
-        
-        # 执行聊天流
-        async for chunk in process_chat_stream(user_query, session_id):
-            yield chunk
-        
-        # 流完成后标记
-        stream_completed = True
-        
-        # 流结束后触发评估（此时数据已存储在 chat_service 中）
+
         try:
-            auto_eval_service = get_auto_evaluation_service()
-            eval_data = get_eval_data(session_id)
-            
-            if auto_eval_service and eval_data and eval_data.answer:
-                print(f"\n📊 [Auto-Eval] Starting evaluation for session {session_id}")
-                print(f"   - Query: {user_query[:50]}...")
-                print(f"   - Context length: {len(eval_data.retrieved_context)} chars")
-                print(f"   - Answer length: {len(eval_data.answer)} chars")
-                
-                # 异步执行评估（sidecar 队列，不阻塞主链路）
-                await auto_eval_service.auto_evaluate_async(
-                    query=user_query,
-                    retrieved_context=eval_data.retrieved_context,
-                    generated_answer=eval_data.answer,
-                    session_id=session_id,
-                    repo_url=repo_url,
-                    language="zh" if any('\u4e00' <= c <= '\u9fff' for c in user_query) else "en"
-                )
-            else:
-                if not auto_eval_service:
-                    print("⚠️ Auto evaluation service not initialized")
-                elif not eval_data:
-                    print(f"⚠️ No eval data found for session {session_id}")
-                elif not eval_data.answer:
-                    print(f"⚠️ Empty answer for session {session_id}")
-        except Exception as e:
-            print(f"⚠️ Failed to trigger auto-eval: {e}")
-            import traceback
-            traceback.print_exc()
+            # 执行聊天流
+            async for chunk in process_chat_stream(user_query, session_id):
+                yield chunk
+
+            # 流完成后标记
+            stream_completed = True
+
+            # 流结束后触发评估（此时数据已存储在 chat_service 中）
+            try:
+                auto_eval_service = get_auto_evaluation_service()
+                eval_data = get_eval_data(session_id)
+
+                if auto_eval_service and eval_data and eval_data.answer:
+                    print(f"\n📊 [Auto-Eval] Starting evaluation for session {session_id}")
+                    print(f"   - Query: {user_query[:50]}...")
+                    print(f"   - Context length: {len(eval_data.retrieved_context)} chars")
+                    print(f"   - Answer length: {len(eval_data.answer)} chars")
+
+                    # 异步执行评估（sidecar 队列，不阻塞主链路）
+                    await auto_eval_service.auto_evaluate_async(
+                        query=user_query,
+                        retrieved_context=eval_data.retrieved_context,
+                        generated_answer=eval_data.answer,
+                        session_id=session_id,
+                        repo_url=repo_url,
+                        language="zh" if any('\u4e00' <= c <= '\u9fff' for c in user_query) else "en"
+                    )
+                else:
+                    if not auto_eval_service:
+                        print("⚠️ Auto evaluation service not initialized")
+                    elif not eval_data:
+                        print(f"⚠️ No eval data found for session {session_id}")
+                    elif not eval_data.answer:
+                        print(f"⚠️ Empty answer for session {session_id}")
+            except Exception as e:
+                print(f"⚠️ Failed to trigger auto-eval: {e}")
+                import traceback
+                traceback.print_exc()
+        finally:
+            tracing_service.end_trace(
+                {
+                    "session_id": session_id,
+                    "stream_completed": stream_completed,
+                    "trace_id": trace_id,
+                }
+            )
     
     # 返回流
     return StreamingResponse(

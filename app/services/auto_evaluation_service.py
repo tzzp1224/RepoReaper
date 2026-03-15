@@ -39,6 +39,7 @@ class _EvalTask:
     session_id: str
     repo_url: str
     language: str
+    trace_id: Optional[str] = None
     enqueued_at: float = field(default_factory=time.monotonic)
 
 
@@ -243,14 +244,15 @@ class AutoEvaluationService:
                 wait_ms = (time.monotonic() - task.enqueued_at) * 1000
                 self._metrics.queue_wait_ms_total += wait_ms
                 self._metrics.queue_wait_ms_max = max(self._metrics.queue_wait_ms_max, wait_ms)
-                await self.auto_evaluate(
-                    query=task.query,
-                    retrieved_context=task.retrieved_context,
-                    generated_answer=task.generated_answer,
-                    session_id=task.session_id,
-                    repo_url=task.repo_url,
-                    language=task.language,
-                )
+                with tracing_service.trace_scope(task.trace_id, session_id=task.session_id):
+                    await self.auto_evaluate(
+                        query=task.query,
+                        retrieved_context=task.retrieved_context,
+                        generated_answer=task.generated_answer,
+                        session_id=task.session_id,
+                        repo_url=task.repo_url,
+                        language=task.language,
+                    )
                 self._metrics.processed += 1
             except Exception as e:
                 self._metrics.failed += 1
@@ -397,31 +399,22 @@ class AutoEvaluationService:
 
             if self.config.visualize_only:
                 if quality_status == "needs_review":
-                    self.needs_review_queue.append(
-                        {
-                            "eval_result": eval_result,
-                            "custom_score": custom_score,
-                            "ragas_score": ragas_score,
-                            "diff": abs(custom_score - (ragas_score if ragas_score is not None else custom_score)),
-                            "timestamp": start_time.isoformat(),
-                            "routed": False,
-                        }
+                    self._enqueue_review_sample(
+                        eval_result=eval_result,
+                        custom_score=custom_score,
+                        ragas_score=ragas_score,
+                        timestamp=start_time,
                     )
                 self._metrics.visualize_only_observed += 1
             else:
                 if quality_status == "needs_review":
-                    self.needs_review_queue.append(
-                        {
-                            "eval_result": eval_result,
-                            "custom_score": custom_score,
-                            "ragas_score": ragas_score,
-                            "diff": abs(custom_score - (ragas_score if ragas_score is not None else custom_score)),
-                            "timestamp": start_time.isoformat(),
-                            "routed": True,
-                        }
+                    self._enqueue_review_sample(
+                        eval_result=eval_result,
+                        custom_score=custom_score,
+                        ragas_score=ragas_score,
+                        timestamp=start_time,
                     )
-                    print("  ⚠️ 需要人工审查 (needs_review)，暂存队列")
-                    self.data_router.route_sample(eval_result)
+                    print("  ⚠️ 需要人工审查 (needs_review)，等待人工审批后再落盘")
                 elif eval_result.data_quality_tier != DataQualityTier.REJECTED:
                     print(
                         f"  ✓ 路由到 data_router "
@@ -509,6 +502,7 @@ class AutoEvaluationService:
             session_id=session_id,
             repo_url=repo_url,
             language=language,
+            trace_id=tracing_service.get_current_trace_id(),
         )
 
         if self.config.drop_when_queue_full:
@@ -568,6 +562,25 @@ class AutoEvaluationService:
             status = "normal"
 
         return final_score, status
+
+    def _enqueue_review_sample(
+        self,
+        eval_result: EvaluationResult,
+        custom_score: float,
+        ragas_score: Optional[float],
+        timestamp: datetime,
+    ) -> None:
+        """将待人工审核样本放入队列（审批前不落盘）。"""
+        self.needs_review_queue.append(
+            {
+                "eval_result": eval_result,
+                "custom_score": custom_score,
+                "ragas_score": ragas_score,
+                "diff": abs(custom_score - (ragas_score if ragas_score is not None else custom_score)),
+                "timestamp": timestamp.isoformat(),
+                "routed": False,
+            }
+        )
 
     async def _ragas_eval(
         self,

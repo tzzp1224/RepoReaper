@@ -152,7 +152,13 @@ cp .env.example .env
 # 在 .env 中设置 QDRANT_MODE=server 与 QDRANT_URL=http://qdrant:6333
 docker compose up -d --build
 ```
-**使用Langfuse**
+**Docker Compose + Langfuse（一条命令启动，推荐）**
+```bash
+cp .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
+```
+
+**仅启动 Langfuse 观测栈**
 ```bash
 docker compose -f docker-compose.observability.yml up -d --build
 ```
@@ -167,11 +173,11 @@ docker compose -f docker-compose.observability.yml up -d --build
 | **数据路由 (SFT)** | ✅ 可用 | 按评分自动分流 Gold/Silver/Bronze/Rejected → JSONL 文件 |
 | **评估 API** | ✅ 可用 | `/evaluate`、`/evaluation/stats`、`/dashboard/*`、`/auto-eval/*` 共 7 个端点 |
 | **离线检索评估** | ✅ 可用 | `test_retrieval.py` — Hit Rate、Recall@K、Precision@K、MRR |
-| **Langfuse 追踪** | ⚠️ 部分完成 | 框架 + 14 处埋点已就位（agent/chat service）；不可用时自动降级为本地日志 `logs/traces/` |
-| **Ragas 集成** | ❌ 占位 | 默认 `use_ragas=False`；`_ragas_eval()` 调用方式与最新 Ragas SDK 不兼容 |
-| **Langfuse ↔ 评估** | ❌ 未打通 | 评估结果仅写 JSONL，未上报 Langfuse Scores API |
+| **Langfuse 追踪** | ✅ 可用 | `/analyze` + `/chat` 已形成完整 trace，sidecar 评估 worker 可继承 `trace_id`；不可用时自动降级为本地日志 `logs/traces/` |
+| **Ragas 集成** | ⚠️ 实验态 | 默认 `use_ragas=False`；`_ragas_eval()` 仍需按新版 SDK 做工程化重构 |
+| **Langfuse ↔ 评估** | ⚠️ 部分打通 | 评估生命周期事件已进入 trace；Scores/Datasets API 仍未同步 |
 
-> **综合完成度约 65%**：自研评估链路已闭环可用；Ragas 与 Langfuse 集成均为半成品。
+> **综合完成度约 80%**：自研评估链路与 Langfuse trace 已可用；主要剩余工作在 Ragas 工程化与评分同步。
 
 ---
 
@@ -184,8 +190,8 @@ docker compose -f docker-compose.observability.yml up -d --build
 2. **`docker-compose.yml` 未包含 Langfuse 服务**  
    即使导入成功，仍需运行中的 Langfuse 实例。请自行添加或使用 [app.langfuse.com](https://app.langfuse.com)。
 
-3. **Trace 链路未关联**  
-   `tracing_service` 记录了 span/event，但调用 Langfuse API 时未传 `trace_id`，Langfuse UI 中只能看到孤立事件而非完整链路树。
+3. **Langfuse Scores/Datasets API 尚未接入**  
+   当前评估仍以 JSONL 落盘为主（`evaluation/sft_data/`）。trace 已关联，但质量分数尚未写入 Langfuse score 对象。
 
 4. **Ragas `_ragas_eval()` API 过时**  
    当前向 `ragas.evaluate()` 传递 dict，最新 Ragas 要求 `Dataset` 对象。已导出 `ragas_eval_dataset.json` 但无脚本消费它。
@@ -202,7 +208,7 @@ docker compose -f docker-compose.observability.yml up -d --build
 
 - [√] **修复 Langfuse 兼容性** — 固定 `langfuse`/`pydantic` 版本或按 Python 版本门控导入
 - [ ] **`docker-compose.yml` 加入 Langfuse** — 一键启动本地可观测平台
-- [ ] **串联 trace_id** — 让 Langfuse UI 展示完整链路树
+- [√] **串联 trace_id** — 让 Langfuse UI 展示完整链路树
 - [ ] **正式接入 Ragas** — 更新 `_ragas_eval()` 使用 `ragas.evaluate(Dataset(...))`，新增独立评估脚本
 - [ ] **丰富黄金数据集** — 补充 `expected_answer`，扩展至 50+ 条用例
 - [ ] **评估仪表盘前端** — Vue 组件可视化质量分布与 Bad Case

@@ -206,6 +206,15 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
             "step": "error",
             "message": f"❌ {str(e)}. The repository is being analyzed by another user."
         })
+    finally:
+        tracing_service.end_trace(
+            {
+                "session_id": session_id,
+                "repo_url": repo_url,
+                "language": language,
+                "trace_id": trace_id,
+            }
+        )
 
 
 async def _agent_stream_inner(

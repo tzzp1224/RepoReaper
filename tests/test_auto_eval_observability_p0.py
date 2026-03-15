@@ -167,6 +167,51 @@ def test_queue_full_drop_is_recorded(tmp_path, monkeypatch):
     assert metrics["dropped_queue_full"] == 1
 
 
+def test_queue_worker_preserves_trace_context(tmp_path, monkeypatch):
+    service, _, _ = _build_service(
+        tmp_path,
+        monkeypatch,
+        config_kwargs={
+            "visualize_only": True,
+            "async_evaluation": True,
+            "queue_enabled": True,
+            "queue_maxsize": 10,
+            "drop_when_queue_full": True,
+        },
+    )
+
+    import app.services.auto_evaluation_service as auto_eval_module
+
+    captured = []
+
+    async def _fake_auto_evaluate(**kwargs):
+        captured.append(
+            (
+                auto_eval_module.tracing_service.get_current_trace_id(),
+                auto_eval_module.tracing_service.get_current_session_id(),
+                kwargs["session_id"],
+            )
+        )
+        return "gold"
+
+    service.auto_evaluate = _fake_auto_evaluate
+
+    async def _run():
+        with auto_eval_module.tracing_service.trace_scope("trace-ctx-1", session_id="sid-ctx-1"):
+            await service.auto_evaluate_async(
+                query="query-trace",
+                retrieved_context="def trace(): pass",
+                generated_answer="T" * 180,
+                session_id="sid-ctx-1",
+            )
+        await asyncio.sleep(0.1)
+        await service.shutdown()
+
+    asyncio.run(_run())
+
+    assert captured == [("trace-ctx-1", "sid-ctx-1", "sid-ctx-1")]
+
+
 def test_ragas_sampling_zero_skips_ragas_call(tmp_path, monkeypatch):
     async def _ragas_eval(self, query, context, answer):
         self._ragas_called = getattr(self, "_ragas_called", 0) + 1

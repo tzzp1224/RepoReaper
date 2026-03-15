@@ -169,7 +169,6 @@ class AutoEvaluationConfig:
     custom_weight: float = field(default_factory=lambda: _env_float("AUTO_EVAL_CUSTOM_WEIGHT", 0.7))
     ragas_weight: float = field(default_factory=lambda: _env_float("AUTO_EVAL_RAGAS_WEIGHT", 0.3))
     diff_threshold: float = field(default_factory=lambda: _env_float("AUTO_EVAL_DIFF_THRESHOLD", 0.2))
-    min_quality_score: float = field(default_factory=lambda: _env_float("AUTO_EVAL_MIN_QUALITY_SCORE", 0.4))
     async_evaluation: bool = field(default_factory=lambda: _env_bool("AUTO_EVAL_ASYNC", True))
     min_query_length: int = field(default_factory=lambda: _env_int("AUTO_EVAL_MIN_QUERY_LENGTH", 10))
     min_answer_length: int = field(default_factory=lambda: _env_int("AUTO_EVAL_MIN_ANSWER_LENGTH", 100))

@@ -186,7 +186,7 @@ def test_auto_eval_respects_enabled_flag(tmp_path, monkeypatch):
     assert not os.path.exists(router.eval_results_file)
 
 
-def test_needs_review_approve_does_not_duplicate_route(tmp_path, monkeypatch):
+def test_needs_review_is_routed_only_after_approve(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     os.environ.setdefault("LLM_PROVIDER", "openai")
@@ -244,7 +244,69 @@ def test_needs_review_approve_does_not_duplicate_route(tmp_path, monkeypatch):
     after = _line_count(router.eval_results_file)
 
     assert len(service.get_review_queue()) == 0
-    assert after == before
+    assert before == 0
+    assert after == 1
+
+
+def test_needs_review_reject_does_not_route(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    os.environ.setdefault("LLM_PROVIDER", "openai")
+    os.environ.setdefault("OPENAI_API_KEY", "dummy")
+
+    import app.services.auto_evaluation_service as auto_eval_module
+    from app.services.auto_evaluation_service import AutoEvaluationService, EvaluationConfig
+
+    monkeypatch.setattr(auto_eval_module.tracing_service, "add_event", lambda *args, **kwargs: None)
+
+    class FakeEvalEngine:
+        async def evaluate_generation(self, **kwargs):
+            return _make_generation_metrics(
+                score=0.82,
+                query=kwargs["query"],
+                context=kwargs["retrieved_context"],
+                answer=kwargs["generated_answer"],
+            )
+
+    class TestService(AutoEvaluationService):
+        async def _ragas_eval(self, query, context, answer):
+            return 0.1, "mock_ragas"
+
+    router = DataRoutingEngine(output_dir=str(tmp_path / "sft"))
+    service = TestService(
+        eval_engine=FakeEvalEngine(),
+        data_router=router,
+        config=EvaluationConfig(
+            enabled=True,
+            use_ragas=True,
+            ragas_sample_rate=1.0,
+            diff_threshold=0.2,
+            async_evaluation=False,
+            min_query_length=1,
+            min_answer_length=1,
+            require_repo_url=False,
+            require_code_in_context=False,
+        ),
+    )
+
+    asyncio.run(
+        service.auto_evaluate(
+            query="how does it work",
+            retrieved_context="def x(): pass",
+            generated_answer="A" * 180,
+            session_id="sid-1",
+            repo_url="https://github.com/a/b",
+        )
+    )
+    assert len(service.get_review_queue()) == 1
+
+    before = _line_count(router.eval_results_file)
+    service.reject_sample(0)
+    after = _line_count(router.eval_results_file)
+
+    assert before == 0
+    assert after == 0
+    assert len(service.get_review_queue()) == 0
 
 
 def test_retrieval_script_drift_fixed():

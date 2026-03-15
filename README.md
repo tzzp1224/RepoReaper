@@ -152,7 +152,13 @@ cp .env.example .env
 # Set QDRANT_MODE=server and QDRANT_URL=http://qdrant:6333 in .env
 docker compose up -d --build
 ```
-**Using Langfuse:**
+**Docker Compose + Langfuse (recommended single command):**
+```bash
+cp .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
+```
+
+**Using Langfuse stack only:**
 ```bash
 docker compose -f docker-compose.observability.yml up -d --build
 ```
@@ -170,11 +176,11 @@ docker compose -f docker-compose.observability.yml up -d --build
 | **Data Routing (SFT)** | ✅ Working | Auto-grades Gold/Silver/Bronze/Rejected → JSONL files |
 | **Eval API Endpoints** | ✅ Working | `/evaluate`, `/evaluation/stats`, `/dashboard/*`, `/auto-eval/*` (7 endpoints) |
 | **Offline Retrieval Eval** | ✅ Working | `test_retrieval.py` — Hit Rate, Recall@K, Precision@K, MRR |
-| **Langfuse Tracing** | ⚠️ Partial | Framework + 14 call sites wired in agent/chat services; falls back to local JSON logs (`logs/traces/`) when Langfuse unavailable |
-| **Ragas Integration** | ❌ Placeholder | `use_ragas=False` by default; `_ragas_eval()` API call doesn't match latest Ragas SDK |
-| **Langfuse ↔ Eval** | ❌ Not connected | Eval results only write JSONL, not reported to Langfuse Scores API |
+| **Langfuse Tracing** | ✅ Working | Trace chain connected for `/analyze` + `/chat`, async eval worker inherits `trace_id`; falls back to local JSON logs (`logs/traces/`) when Langfuse unavailable |
+| **Ragas Integration** | ⚠️ Experimental | `use_ragas=False` by default; `_ragas_eval()` still needs SDK-level refactor for robust production usage |
+| **Langfuse ↔ Eval** | ⚠️ Partial | Eval lifecycle events are in trace; Scores/Datasets API sync is not implemented yet |
 
-> **Overall completion: ~65%** — the self-built eval loop is production-ready; Ragas and Langfuse integrations are scaffolded but not functional.
+> **Overall completion: ~80%** — self-built eval loop and Langfuse trace pipeline are usable; Ragas productionization and score sync are the remaining gaps.
 
 ---
 
@@ -187,8 +193,8 @@ docker compose -f docker-compose.observability.yml up -d --build
 2. **Langfuse Server not included in `docker-compose.yml`**  
    Even if the import works, you need a running Langfuse instance. Add it yourself or use [app.langfuse.com](https://app.langfuse.com).
 
-3. **Trace spans are not linked**  
-   `tracing_service` records spans/events but doesn't pass `trace_id` to Langfuse API calls — the Langfuse UI will show isolated events instead of a connected trace tree.
+3. **Langfuse Scores/Datasets API is not integrated yet**  
+   Current eval output is JSONL-first (`evaluation/sft_data/`). Trace events are connected, but quality scores are not pushed to Langfuse score objects.
 
 4. **Ragas `_ragas_eval()` uses outdated API**  
    Passes a plain dict to `ragas.evaluate()`, but latest Ragas requires a `Dataset` object. The `ragas_eval_dataset.json` export exists but no script consumes it.
@@ -203,9 +209,9 @@ docker compose -f docker-compose.observability.yml up -d --build
 
 ## 🗺 Roadmap
 
-- [ ] **Fix Langfuse compat** — pin `langfuse`/`pydantic` versions or gate import behind Python version check
+- [x] **Fix Langfuse compat** — pin `langfuse`/`pydantic` versions or gate import behind Python version check
 - [ ] **Add Langfuse to `docker-compose.yml`** — one-command local observability
-- [ ] **Wire trace_id through spans** — enable full trace tree in Langfuse UI
+- [x] **Wire trace_id through spans** — enable full trace tree in Langfuse UI
 - [ ] **Integrate Ragas properly** — update `_ragas_eval()` to use `ragas.evaluate(Dataset(...))`, add a standalone eval script
 - [ ] **Enrich golden dataset** — add `expected_answer` for generation benchmarking, expand to 50+ cases
 - [ ] **Eval dashboard frontend** — Vue component to visualize quality distribution and bad cases
