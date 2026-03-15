@@ -169,14 +169,12 @@ docker compose -f docker-compose.observability.yml up -d --build
 | 组件 | 状态 | 说明 |
 |:----|:----:|:----|
 | **在线自动评估主链路** | ✅ 可用 | `/chat` → sidecar 异步评估 → 质量分级路由 |
-| **人工审核闸门** | ✅ 可用 | `needs_review` 审批后才落盘，具备 approve/reject API |
+| **人工审核闸门** | ✅ 可用 | `sample_id` 审核接口 + 待审队列持久化 + 幂等审批 |
 | **Langfuse 可观测** | ✅ 可用 | 全链路 trace + 分数上报（`final/custom/ragas/tier`） |
 | **离线检索评估** | ⚠️ 部分完成 | 脚本可跑，但依赖已索引向量库且黄金集标注不足 |
 | **黄金数据集质量** | ❌ 不完整 | 26 条样本，`expected_answer` 基本为空，且全英文 |
-| **Ragas 集成** | ⚠️ 实验态 | 已有抽样/超时/熔断，但 `_ragas_eval()` 仍使用旧接口 |
+| **Ragas 集成** | ✅ 已实现 | 已升级 Dataset API，保留抽样/超时/熔断机制 |
 | **运行时合同收敛** | ✅ 已完成 | 在线运行路径已聚焦 generation 评估；死评估导入与运行时 DPO 占位已移除，score-tier 阈值统一，去重缓存确定性淘汰，启动不再预加载黄金集，Langfuse score 上报改为确定性 `create_score` 路径并支持优雅 shutdown |
-
-> 当前结论：线上评估闭环可用；离线基准质量、数据治理与持久化能力是下一阶段重点。
 
 ---
 
@@ -189,25 +187,16 @@ docker compose -f docker-compose.observability.yml up -d --build
 2. **`docker-compose.yml` 未包含 Langfuse 服务**  
    即使导入成功，仍需运行中的 Langfuse 实例。请自行添加或使用 [app.langfuse.com](https://app.langfuse.com)。
 
-3. **审核队列与去重缓存仅内存态**  
-   `needs_review_queue` 与 `_evaluated_keys` 都是进程内结构，服务重启会丢失状态。
-
-4. **Ragas `_ragas_eval()` API 过时**  
-   当前实现向 `ragas.evaluate()` 传递 dict；新版 SDK 需要 Dataset 路径。
-
-5. **审核 API 仍为索引操作**  
-   `approve/reject` 依赖队列 index，在并发下不稳定。
-
 ---
 
 ## 🗺 评估 Roadmap（唯一基线）
 
-- [√] **Phase 0 - 异步 sidecar + 质量闸门**：主链路非阻塞、队列背压、输入过滤、审批后落盘。
-- [√] **Phase 1 - Trace 全链路串联**：`/chat`、`/analyze`、worker trace 透传，tracing fail-open。
-- [√] **Phase 2 - 分数可观测**：Langfuse Scores 上报 `final/custom/ragas(可选)/quality_tier`。
-- [√] **Phase 3 - 合同收敛与清理（优先级最高）**：在线链路只保留 generation 评估，迁移或删除运行时无用评估资产（DPO 占位、无用导入、无效符号），并统一阈值真值来源；DoD：运行时无死代码。
-- [ ] **Phase 4 - Ragas 现代化**：`_ragas_eval()` 升级为 Dataset API，保留抽样+超时+熔断，并补齐确定性测试；DoD：不再使用旧 API。
-- [ ] **Phase 5 - 审核流持久化**：approve/reject 从 index 改为稳定 `sample_id`，待审队列持久化且操作幂等；DoD：重启不丢审核状态。
+- [x] **Phase 0 - 异步 sidecar + 质量闸门**：主链路非阻塞、队列背压、输入过滤、审批后落盘。
+- [x] **Phase 1 - Trace 全链路串联**：`/chat`、`/analyze`、worker trace 透传，tracing fail-open。
+- [x] **Phase 2 - 分数可观测**：Langfuse Scores 上报 `final/custom/ragas(可选)/quality_tier`。
+- [x] **Phase 3 - 合同收敛与清理（优先级最高）**：在线链路只保留 generation 评估，迁移或删除运行时无用评估资产（DPO 占位、无用导入、无效符号），并统一阈值真值来源；DoD：运行时无死代码。
+- [x] **Phase 4 - Ragas 现代化（代码路径）**：`_ragas_eval()` 已迁移到 Dataset API，保留抽样+超时+熔断，并有兼容性测试。
+- [x] **Phase 5 - 审核流持久化（代码路径）**：稳定 `sample_id` API、待审队列与决策持久化、approve/reject 幂等。
 - [ ] **Phase 6 - 黄金集治理**：拆分检索/生成基准集，补齐参考答案与多语言覆盖，在 CI 做完整性校验；DoD：可作为回归基准。
 - [ ] **Phase 7 - CI 回归闸门**：接入离线评估命令与阈值门禁，PR 指标回退自动失败；DoD：有稳定机器可读报告。
 - [ ] **Phase 8 - Langfuse Dataset 同步**：审批通过样本实现 JSONL + Langfuse Dataset 双写一致；DoD：无双写漂移。

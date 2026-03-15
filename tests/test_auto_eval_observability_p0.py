@@ -1,6 +1,8 @@
 import asyncio
 import os
 import hashlib
+import sys
+import types
 from datetime import datetime
 
 from evaluation.data_router import DataRoutingEngine
@@ -27,6 +29,8 @@ def _line_count(path: str) -> int:
 
 
 def _build_service(tmp_path, monkeypatch, config_kwargs=None, ragas_impl=None, sleep_seconds=0.0):
+    monkeypatch.chdir(tmp_path)
+
     os.environ.setdefault("LLM_PROVIDER", "openai")
     os.environ.setdefault("OPENAI_API_KEY", "dummy")
 
@@ -350,3 +354,73 @@ def test_ragas_timeout_triggers_circuit_breaker(tmp_path, monkeypatch):
     assert metrics["ragas_timeouts"] >= 2
     assert metrics["ragas_circuit_open_hits"] >= 1
     assert metrics["ragas_circuit_open"] is True
+
+
+def test_ragas_eval_uses_dataset_api_phase4(tmp_path, monkeypatch):
+    service, _, _ = _build_service(
+        tmp_path,
+        monkeypatch,
+        config_kwargs={
+            "visualize_only": True,
+            "async_evaluation": False,
+            "use_ragas": True,
+            "ragas_sample_rate": 1.0,
+        },
+    )
+
+    captured = {}
+
+    class _FakeDataset:
+        @staticmethod
+        def from_dict(payload):
+            captured["dataset_payload"] = payload
+            return {"dataset_object": payload}
+
+    class _FakeResult:
+        def __init__(self):
+            self.scores = [{"faithfulness": 0.8, "answer_relevancy": 0.6}]
+
+        def __getitem__(self, key):
+            raise KeyError(key)
+
+    def _fake_evaluate(*, dataset, metrics, **kwargs):
+        captured["dataset"] = dataset
+        captured["metrics"] = metrics
+        captured["kwargs"] = kwargs
+        return _FakeResult()
+
+    ragas_mod = types.ModuleType("ragas")
+    ragas_mod.evaluate = _fake_evaluate
+
+    metrics_collections_mod = types.ModuleType("ragas.metrics.collections")
+    metrics_collections_mod.faithfulness = types.SimpleNamespace(metric="faith_metric_obj")
+    metrics_collections_mod.answer_relevancy = types.SimpleNamespace(metric="answer_metric_obj")
+
+    ragas_metrics_mod = types.ModuleType("ragas.metrics")
+    ragas_metrics_mod.collections = metrics_collections_mod
+
+    datasets_mod = types.ModuleType("datasets")
+    datasets_mod.Dataset = _FakeDataset
+
+    monkeypatch.setitem(sys.modules, "ragas", ragas_mod)
+    monkeypatch.setitem(sys.modules, "ragas.metrics", ragas_metrics_mod)
+    monkeypatch.setitem(sys.modules, "ragas.metrics.collections", metrics_collections_mod)
+    monkeypatch.setitem(sys.modules, "datasets", datasets_mod)
+
+    score, details = asyncio.run(
+        service._ragas_eval(
+            query="how auth works",
+            context="def login(): pass",
+            answer="authentication flow",
+        )
+    )
+
+    assert captured["dataset_payload"]["question"] == ["how auth works"]
+    assert captured["dataset_payload"]["contexts"] == [["def login(): pass"]]
+    assert captured["dataset_payload"]["answer"] == ["authentication flow"]
+    assert captured["dataset"] == {"dataset_object": captured["dataset_payload"]}
+    assert captured["metrics"] == ["faith_metric_obj", "answer_metric_obj"]
+    assert captured["kwargs"]["show_progress"] is False
+    assert captured["kwargs"]["raise_exceptions"] is False
+    assert score == 0.7
+    assert "faithfulness=0.800" in details

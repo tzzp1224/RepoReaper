@@ -58,3 +58,10 @@ evaluation/sft_data/negative_samples.jsonl
 evaluation/sft_data/positive_samples.jsonl
 evaluation/sft_data/skipped_samples.jsonl
 evaluation/sft_data/cleaned/rejected_20260128_010745.jsonl
+
+# Auto-eval runtime/audit artifacts (local only)
+evaluation/audit_runs/
+evaluation/sft_data/evaluated_keys.json
+evaluation/sft_data/needs_review_queue.json
+evaluation/sft_data/review_decisions.json
+evaluation/sft_data/tmp_audit/

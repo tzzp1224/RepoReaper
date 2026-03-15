@@ -333,3 +333,137 @@ def test_retrieval_script_drift_fixed():
 
     assert "file_list = await get_repo_structure(repo_url)" in content
     assert "store.collection.count()" not in content
+
+
+def test_review_queue_persists_and_approve_by_sample_id_is_idempotent(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    os.environ.setdefault("LLM_PROVIDER", "openai")
+    os.environ.setdefault("OPENAI_API_KEY", "dummy")
+
+    import app.services.auto_evaluation_service as auto_eval_module
+    from app.services.auto_evaluation_service import AutoEvaluationService, EvaluationConfig
+
+    monkeypatch.setattr(auto_eval_module.tracing_service, "add_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auto_eval_module.tracing_service, "record_score", lambda *args, **kwargs: None)
+
+    class FakeEvalEngine:
+        async def evaluate_generation(self, **kwargs):
+            return _make_generation_metrics(
+                score=0.82,
+                query=kwargs["query"],
+                context=kwargs["retrieved_context"],
+                answer=kwargs["generated_answer"],
+            )
+
+    class TestService(AutoEvaluationService):
+        async def _ragas_eval(self, query, context, answer):
+            return 0.1, "mock_ragas"
+
+    router = DataRoutingEngine(output_dir=str(tmp_path / "sft"))
+    service = TestService(
+        eval_engine=FakeEvalEngine(),
+        data_router=router,
+        config=EvaluationConfig(
+            enabled=True,
+            use_ragas=True,
+            ragas_sample_rate=1.0,
+            diff_threshold=0.2,
+            async_evaluation=False,
+            min_query_length=1,
+            min_answer_length=1,
+            require_repo_url=False,
+            require_code_in_context=False,
+        ),
+    )
+
+    asyncio.run(
+        service.auto_evaluate(
+            query="how does it work",
+            retrieved_context="def x(): pass",
+            generated_answer="A" * 180,
+            session_id="sid-1",
+            repo_url="https://github.com/a/b",
+        )
+    )
+
+    queue = service.get_review_queue()
+    assert len(queue) == 1
+    sample_id = queue[0].get("sample_id")
+    assert sample_id
+
+    # 重建 service，验证队列持久化
+    service_reloaded = TestService(
+        eval_engine=FakeEvalEngine(),
+        data_router=router,
+        config=EvaluationConfig(
+            enabled=True,
+            use_ragas=True,
+            ragas_sample_rate=1.0,
+            diff_threshold=0.2,
+            async_evaluation=False,
+            min_query_length=1,
+            min_answer_length=1,
+            require_repo_url=False,
+            require_code_in_context=False,
+        ),
+    )
+
+    reloaded_queue = service_reloaded.get_review_queue()
+    assert any(item.get("sample_id") == sample_id for item in reloaded_queue)
+
+    before = _line_count(router.eval_results_file)
+    ok1, _ = service_reloaded.approve_sample_by_id(sample_id)
+    after_first = _line_count(router.eval_results_file)
+    ok2, _ = service_reloaded.approve_sample_by_id(sample_id)
+    after_second = _line_count(router.eval_results_file)
+
+    assert ok1 is True
+    assert ok2 is True
+    assert before == 0
+    assert after_first == 1
+    assert after_second == 1
+
+
+def test_dedupe_cache_persists_across_restart(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    os.environ.setdefault("LLM_PROVIDER", "openai")
+    os.environ.setdefault("OPENAI_API_KEY", "dummy")
+
+    from app.services.auto_evaluation_service import AutoEvaluationService, EvaluationConfig
+
+    class FakeEvalEngine:
+        async def evaluate_generation(self, **kwargs):
+            return _make_generation_metrics()
+
+    router = DataRoutingEngine(output_dir=str(tmp_path / "sft"))
+    service = AutoEvaluationService(
+        eval_engine=FakeEvalEngine(),
+        data_router=router,
+        config=EvaluationConfig(
+            enabled=True,
+            async_evaluation=False,
+            min_query_length=1,
+            min_answer_length=1,
+            require_repo_url=False,
+            require_code_in_context=False,
+        ),
+    )
+
+    assert service._check_duplicate("same-query", "same-session") is False
+
+    service_reloaded = AutoEvaluationService(
+        eval_engine=FakeEvalEngine(),
+        data_router=router,
+        config=EvaluationConfig(
+            enabled=True,
+            async_evaluation=False,
+            min_query_length=1,
+            min_answer_length=1,
+            require_repo_url=False,
+            require_code_in_context=False,
+        ),
+    )
+
+    assert service_reloaded._check_duplicate("same-query", "same-session") is True

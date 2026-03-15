@@ -398,6 +398,7 @@ async def get_review_queue():
             "samples": [
                 {
                     "index": i,
+                    "sample_id": item.get("sample_id"),
                     "query": item["eval_result"].query,
                     "custom_score": item["custom_score"],
                     "ragas_score": item["ragas_score"],
@@ -423,12 +424,11 @@ async def approve_sample(index: int):
         auto_eval_service = get_auto_evaluation_service()
         if not auto_eval_service:
             return {"error": "Auto evaluation service not initialized", "status": "failed"}
-        
-        auto_eval_service.approve_sample(index)
-        
+
+        ok, message = auto_eval_service.approve_sample(index)
         return {
-            "status": "success",
-            "message": f"Sample {index} approved and stored"
+            "status": "success" if ok else "failed",
+            "message": message,
         }
     except Exception as e:
         return {"error": str(e), "status": "failed"}
@@ -445,12 +445,55 @@ async def reject_sample(index: int):
         auto_eval_service = get_auto_evaluation_service()
         if not auto_eval_service:
             return {"error": "Auto evaluation service not initialized", "status": "failed"}
-        
-        auto_eval_service.reject_sample(index)
-        
+
+        ok, message = auto_eval_service.reject_sample(index)
         return {
-            "status": "success",
-            "message": f"Sample {index} rejected and removed from queue"
+            "status": "success" if ok else "failed",
+            "message": message,
+        }
+    except Exception as e:
+        return {"error": str(e), "status": "failed"}
+
+
+@app.post("/auto-eval/approve-by-id/{sample_id}")
+async def approve_sample_by_id(sample_id: str):
+    """
+    人工批准某个样本（稳定 sample_id，幂等）
+
+    POST /auto-eval/approve-by-id/sample_xxx
+    """
+    try:
+        auto_eval_service = get_auto_evaluation_service()
+        if not auto_eval_service:
+            return {"error": "Auto evaluation service not initialized", "status": "failed"}
+
+        ok, message = auto_eval_service.approve_sample_by_id(sample_id)
+        return {
+            "status": "success" if ok else "failed",
+            "sample_id": sample_id,
+            "message": message,
+        }
+    except Exception as e:
+        return {"error": str(e), "status": "failed"}
+
+
+@app.post("/auto-eval/reject-by-id/{sample_id}")
+async def reject_sample_by_id(sample_id: str):
+    """
+    人工拒绝某个样本（稳定 sample_id，幂等）
+
+    POST /auto-eval/reject-by-id/sample_xxx
+    """
+    try:
+        auto_eval_service = get_auto_evaluation_service()
+        if not auto_eval_service:
+            return {"error": "Auto evaluation service not initialized", "status": "failed"}
+
+        ok, message = auto_eval_service.reject_sample_by_id(sample_id)
+        return {
+            "status": "success" if ok else "failed",
+            "sample_id": sample_id,
+            "message": message,
         }
     except Exception as e:
         return {"error": str(e), "status": "failed"}

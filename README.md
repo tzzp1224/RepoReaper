@@ -172,14 +172,12 @@ docker compose -f docker-compose.observability.yml up -d --build
 | Component | Status | Notes |
 |:----------|:------:|:------|
 | **Online Auto-Eval Pipeline** | ✅ Working | `/chat` → async sidecar → generation eval → tier routing |
-| **Human Review Gate** | ✅ Working | `needs_review` is gated before routing; approve/reject APIs are available |
+| **Human Review Gate** | ✅ Working | `sample_id`-based approve/reject with persistent queue and idempotent decisions |
 | **Langfuse Observability** | ✅ Working | End-to-end trace + score reporting (`final/custom/ragas/tier`) |
 | **Offline Retrieval Benchmark** | ⚠️ Partial | Script works, but depends on pre-indexed vector store and limited golden labels |
 | **Golden Dataset Quality** | ❌ Incomplete | 26 samples, mostly no `expected_answer`, all English |
-| **Ragas Integration** | ⚠️ Experimental | Sampling/timeout/circuit exists; `_ragas_eval()` still uses outdated dict input |
+| **Ragas Integration** | ✅ Implemented | Dataset-based API path with sampling/timeout/circuit breaker |
 | **Runtime Contract Cleanup** | ✅ Completed | Runtime path is generation-focused; dead eval imports/DPO runtime placeholders removed, canonical score-tier thresholds centralized, dedupe eviction deterministic, startup no longer preloads golden dataset, Langfuse score path uses deterministic `create_score` fallback and graceful tracing shutdown |
-
-> Current state: the production online eval loop is available, while offline benchmark quality and data governance are the main gaps.
 
 ---
 
@@ -192,15 +190,6 @@ docker compose -f docker-compose.observability.yml up -d --build
 2. **Langfuse Server not included in `docker-compose.yml`**  
    Even if the import works, you need a running Langfuse instance. Add it yourself or use [app.langfuse.com](https://app.langfuse.com).
 
-3. **Review queue and dedupe cache are memory-only**  
-   `needs_review_queue` and `_evaluated_keys` are in-process structures; restart loses pending review state.
-
-4. **Ragas `_ragas_eval()` uses outdated API**  
-   Current implementation passes a plain dict to `ragas.evaluate()`. Latest SDK expects a dataset object path.
-
-5. **Review API uses index-based operations**  
-   `approve/reject` currently depend on queue index, which is fragile under concurrent operations.
-
 ---
 
 ## 🗺 Evaluation Roadmap (Canonical)
@@ -209,8 +198,8 @@ docker compose -f docker-compose.observability.yml up -d --build
 - [x] **Phase 1 - Trace continuity**: `/chat` + `/analyze` + worker trace propagation with fail-open tracing.
 - [x] **Phase 2 - Score observability**: Langfuse Scores reporting for `final/custom/ragas(optional)/quality_tier`.
 - [x] **Phase 3 - Contract cleanup (required first)**: keep online runtime focused on generation eval only, move or remove unused runtime artifacts (DPO placeholders, dead imports, unused runtime symbols), and define one canonical threshold map; DoD: runtime path has no dead eval symbols.
-- [ ] **Phase 4 - Ragas modernization**: migrate `_ragas_eval()` to current Dataset-based API, keep sampling+timeout+CB, and add deterministic tests for success/timeout/error; DoD: no deprecated API usage.
-- [ ] **Phase 5 - Durable review workflow**: replace index-based approve/reject with stable `sample_id`, persist pending review queue, make approve/reject idempotent; DoD: restart-safe review state.
+- [x] **Phase 4 - Ragas modernization (code path)**: `_ragas_eval()` migrated to Dataset-based API with timeout/sampling/CB and compatibility tests.
+- [x] **Phase 5 - Durable review workflow (code path)**: stable `sample_id` APIs, persistent review queue/decisions, idempotent approve/reject.
 - [ ] **Phase 6 - Golden dataset governance**: split retrieval vs generation benchmark sets, add reference answers and multilingual coverage, enforce validator checks in CI; DoD: benchmark set is complete enough for regression.
 - [ ] **Phase 7 - Regression pipeline in CI**: add offline eval command(s) with threshold gates and machine-readable reports; DoD: PRs fail on metric regression.
 - [ ] **Phase 8 - Langfuse dataset sync**: on approved samples, sync local JSONL + Langfuse Datasets/trace links in one flow; DoD: no dual-write drift.

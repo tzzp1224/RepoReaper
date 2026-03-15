@@ -15,9 +15,11 @@ import json
 import os
 import random
 import time
+import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any
-from dataclasses import asdict, dataclass, field, replace
+from pathlib import Path
+from dataclasses import asdict, dataclass, field, replace, fields
 from collections import OrderedDict
 
 from evaluation.evaluation_framework import (
@@ -26,6 +28,7 @@ from evaluation.evaluation_framework import (
     DataRoutingEngine,
     DataQualityTier,
 )
+from evaluation.models import QueryRewriteMetrics, RetrievalMetrics, GenerationMetrics, AgenticMetrics
 from evaluation.utils import is_chatty_query, has_code_indicators
 from app.services.tracing_service import tracing_service
 from app.core.config import AutoEvaluationConfig, auto_eval_config as default_auto_eval_config
@@ -91,9 +94,172 @@ class AutoEvaluationService:
         self._ragas_consecutive_failures = 0
         self._ragas_circuit_open_until = 0.0
 
-        # 被过滤数据的记录文件
-        self.skipped_samples_file = "evaluation/sft_data/skipped_samples.jsonl"
-        os.makedirs(os.path.dirname(self.skipped_samples_file), exist_ok=True)
+        # 运行时状态文件（Phase 5：持久化）
+        self._state_dir = Path("evaluation/sft_data")
+        self._state_dir.mkdir(parents=True, exist_ok=True)
+        self.skipped_samples_file = str(self._state_dir / "skipped_samples.jsonl")
+        self.review_queue_file = str(self._state_dir / "needs_review_queue.json")
+        self.evaluated_keys_file = str(self._state_dir / "evaluated_keys.json")
+        self.review_decisions_file = str(self._state_dir / "review_decisions.json")
+        self._review_decisions: Dict[str, Dict[str, Any]] = {}
+        self._load_persistent_state()
+
+    def _write_json_atomic(self, filepath: str, payload: Any) -> None:
+        """原子写入 JSON，避免文件损坏。"""
+        temp_filepath = f"{filepath}.tmp"
+        with open(temp_filepath, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(temp_filepath, filepath)
+
+    @staticmethod
+    def _parse_timestamp(value: Any) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                pass
+        return datetime.now()
+
+    @staticmethod
+    def _metric_from_payload(payload: Optional[Dict[str, Any]], metric_cls):
+        """从字典安全恢复 dataclass 指标对象。"""
+        if not isinstance(payload, dict):
+            return None
+        allowed_fields = {f.name for f in fields(metric_cls)}
+        kwargs = {k: v for k, v in payload.items() if k in allowed_fields}
+        try:
+            return metric_cls(**kwargs)
+        except Exception:
+            return None
+
+    def _evaluation_result_from_dict(self, payload: Dict[str, Any]) -> Optional[EvaluationResult]:
+        """从持久化字典恢复 EvaluationResult。"""
+        if not isinstance(payload, dict):
+            return None
+
+        result = EvaluationResult(
+            session_id=payload.get("session_id", "unknown"),
+            query=payload.get("query", ""),
+            repo_url=payload.get("repo_url", ""),
+            timestamp=self._parse_timestamp(payload.get("timestamp")),
+            language=payload.get("language", "en"),
+            query_rewrite_metrics=self._metric_from_payload(payload.get("query_rewrite"), QueryRewriteMetrics),
+            retrieval_metrics=self._metric_from_payload(payload.get("retrieval"), RetrievalMetrics),
+            generation_metrics=self._metric_from_payload(payload.get("generation"), GenerationMetrics),
+            agentic_metrics=self._metric_from_payload(payload.get("agentic"), AgenticMetrics),
+            error_message=payload.get("error_message"),
+            notes=payload.get("notes", ""),
+        )
+        try:
+            score = float(payload.get("overall_score", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+        result.apply_overall_score(score)
+        return result
+
+    def _serialize_review_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        eval_result_dict = item.get("eval_result_dict")
+        if not eval_result_dict:
+            eval_result = item.get("eval_result")
+            if isinstance(eval_result, EvaluationResult):
+                eval_result_dict = eval_result.to_dict()
+            else:
+                eval_result_dict = {}
+
+        return {
+            "sample_id": item.get("sample_id"),
+            "eval_result": eval_result_dict,
+            "custom_score": item.get("custom_score"),
+            "ragas_score": item.get("ragas_score"),
+            "diff": item.get("diff"),
+            "timestamp": item.get("timestamp"),
+            "routed": bool(item.get("routed", False)),
+        }
+
+    def _deserialize_review_item(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return None
+
+        eval_payload = payload.get("eval_result")
+        eval_result = self._evaluation_result_from_dict(eval_payload if isinstance(eval_payload, dict) else {})
+        if not eval_result:
+            return None
+
+        sample_id = payload.get("sample_id")
+        if not sample_id:
+            sample_id = f"sample_{uuid.uuid4().hex[:16]}"
+
+        return {
+            "sample_id": sample_id,
+            "eval_result": eval_result,
+            "eval_result_dict": eval_result.to_dict(),
+            "custom_score": payload.get("custom_score"),
+            "ragas_score": payload.get("ragas_score"),
+            "diff": payload.get("diff"),
+            "timestamp": payload.get("timestamp") or datetime.now().isoformat(),
+            "routed": bool(payload.get("routed", False)),
+        }
+
+    def _persist_review_queue(self) -> None:
+        try:
+            serialized = [self._serialize_review_item(item) for item in self.needs_review_queue]
+            self._write_json_atomic(self.review_queue_file, serialized)
+        except Exception as e:
+            print(f"  ⚠️ 保存 needs_review 队列失败: {e}")
+
+    def _persist_evaluated_keys(self) -> None:
+        try:
+            self._write_json_atomic(self.evaluated_keys_file, list(self._evaluated_keys.keys()))
+        except Exception as e:
+            print(f"  ⚠️ 保存去重缓存失败: {e}")
+
+    def _persist_review_decisions(self) -> None:
+        try:
+            self._write_json_atomic(self.review_decisions_file, self._review_decisions)
+        except Exception as e:
+            print(f"  ⚠️ 保存审核决策失败: {e}")
+
+    def _load_persistent_state(self) -> None:
+        """加载审核队列、去重缓存、审核决策（失败不影响主流程）。"""
+        # 加载去重缓存
+        if os.path.exists(self.evaluated_keys_file):
+            try:
+                with open(self.evaluated_keys_file, "r", encoding="utf-8") as f:
+                    keys = json.load(f)
+                if isinstance(keys, list):
+                    self._evaluated_keys = OrderedDict((str(k), None) for k in keys if isinstance(k, str))
+                    if len(self._evaluated_keys) > 1000:
+                        while len(self._evaluated_keys) > 500:
+                            self._evaluated_keys.popitem(last=False)
+            except Exception as e:
+                print(f"  ⚠️ 加载去重缓存失败: {e}")
+
+        # 加载审核决策（用于 approve/reject 幂等）
+        if os.path.exists(self.review_decisions_file):
+            try:
+                with open(self.review_decisions_file, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+                if isinstance(payload, dict):
+                    self._review_decisions = payload
+            except Exception as e:
+                print(f"  ⚠️ 加载审核决策失败: {e}")
+
+        # 加载待审核队列
+        if os.path.exists(self.review_queue_file):
+            try:
+                with open(self.review_queue_file, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+                if isinstance(payload, list):
+                    loaded_items = []
+                    for item in payload:
+                        loaded = self._deserialize_review_item(item)
+                        if loaded:
+                            loaded_items.append(loaded)
+                    self.needs_review_queue = loaded_items
+            except Exception as e:
+                print(f"  ⚠️ 加载 needs_review 队列失败: {e}")
 
     def _safe_add_event(self, event_name: str, event_data: Dict[str, Any]) -> None:
         """Tracing 必须 fail-open，不能影响评估流程。"""
@@ -210,6 +376,7 @@ class AutoEvaluationService:
             while len(self._evaluated_keys) > 500:
                 self._evaluated_keys.popitem(last=False)
 
+        self._persist_evaluated_keys()
         return False
 
     def _is_ragas_circuit_open(self) -> bool:
@@ -415,12 +582,13 @@ class AutoEvaluationService:
             # 设置综合得分
             eval_result.apply_overall_score(final_score)
 
+            review_sample_id: Optional[str] = None
             if quality_status == "needs_review":
                 eval_result.notes += " | needs_review=true"
 
             if self.config.visualize_only:
                 if quality_status == "needs_review":
-                    self._enqueue_review_sample(
+                    review_sample_id = self._enqueue_review_sample(
                         eval_result=eval_result,
                         custom_score=custom_score,
                         ragas_score=ragas_score,
@@ -429,7 +597,7 @@ class AutoEvaluationService:
                 self._metrics.visualize_only_observed += 1
             else:
                 if quality_status == "needs_review":
-                    self._enqueue_review_sample(
+                    review_sample_id = self._enqueue_review_sample(
                         eval_result=eval_result,
                         custom_score=custom_score,
                         ragas_score=ragas_score,
@@ -453,6 +621,8 @@ class AutoEvaluationService:
                 "quality_tier": eval_result.data_quality_tier.value,
                 "visualize_only": self.config.visualize_only,
             }
+            if review_sample_id:
+                score_metadata["review_sample_id"] = review_sample_id
             self._safe_record_score(
                 "auto_eval.final_score",
                 round(float(final_score), 6),
@@ -487,6 +657,7 @@ class AutoEvaluationService:
                     "status": quality_status,
                     "quality_tier": eval_result.data_quality_tier.value,
                     "visualize_only": self.config.visualize_only,
+                    "review_sample_id": review_sample_id,
                 },
             )
 
@@ -621,11 +792,14 @@ class AutoEvaluationService:
         custom_score: float,
         ragas_score: Optional[float],
         timestamp: datetime,
-    ) -> None:
+    ) -> str:
         """将待人工审核样本放入队列（审批前不落盘）。"""
+        sample_id = f"sample_{uuid.uuid4().hex[:16]}"
         self.needs_review_queue.append(
             {
+                "sample_id": sample_id,
                 "eval_result": eval_result,
+                "eval_result_dict": eval_result.to_dict(),
                 "custom_score": custom_score,
                 "ragas_score": ragas_score,
                 "diff": abs(custom_score - (ragas_score if ragas_score is not None else custom_score)),
@@ -633,6 +807,44 @@ class AutoEvaluationService:
                 "routed": False,
             }
         )
+        self._persist_review_queue()
+        return sample_id
+
+    @staticmethod
+    def _extract_ragas_metric_value(result: Any, metric_names: tuple[str, ...]) -> Optional[float]:
+        """从不同版本 ragas 返回结构中提取指标值。"""
+        for metric_name in metric_names:
+            try:
+                value = result[metric_name]
+                if isinstance(value, list):
+                    if value:
+                        return float(value[0])
+                elif value is not None:
+                    return float(value)
+            except Exception:
+                pass
+
+        scores = getattr(result, "scores", None)
+        if isinstance(scores, list) and scores:
+            first = scores[0]
+            if isinstance(first, dict):
+                for metric_name in metric_names:
+                    value = first.get(metric_name)
+                    if value is not None:
+                        return float(value)
+
+        to_pandas = getattr(result, "to_pandas", None)
+        if callable(to_pandas):
+            try:
+                frame = to_pandas()
+                if len(frame) > 0:
+                    row = frame.iloc[0]
+                    for metric_name in metric_names:
+                        if metric_name in row and row[metric_name] is not None:
+                            return float(row[metric_name])
+            except Exception:
+                pass
+        return None
 
     async def _ragas_eval(
         self,
@@ -647,25 +859,55 @@ class AutoEvaluationService:
             (score, details)
         """
         try:
-            from ragas.metrics import faithfulness, answer_relevancy
             from ragas import evaluate
+            from datasets import Dataset
+            try:
+                from ragas.metrics.collections import faithfulness as ragas_faithfulness
+                from ragas.metrics.collections import answer_relevancy as ragas_answer_relevancy
+                faithfulness_metric = getattr(ragas_faithfulness, "metric", ragas_faithfulness)
+                answer_relevancy_metric = getattr(ragas_answer_relevancy, "metric", ragas_answer_relevancy)
+            except ImportError:
+                # 兼容旧版 ragas 指标导入路径
+                from ragas.metrics import faithfulness as faithfulness_metric
+                from ragas.metrics import answer_relevancy as answer_relevancy_metric
 
-            # 构造 Ragas 数据集
+            # 构造 Ragas 数据集（Phase 4：Dataset API）
             dataset_dict = {
                 "question": [query],
                 "contexts": [[context]],
                 "answer": [answer],
             }
+            dataset = Dataset.from_dict(dataset_dict)
 
             # 执行评估
-            result = evaluate(
-                dataset=dataset_dict,
-                metrics=[faithfulness, answer_relevancy],
-            )
+            try:
+                result = await asyncio.to_thread(
+                    evaluate,
+                    dataset=dataset,
+                    metrics=[faithfulness_metric, answer_relevancy_metric],
+                    show_progress=False,
+                    raise_exceptions=False,
+                )
+            except TypeError:
+                result = await asyncio.to_thread(
+                    evaluate,
+                    dataset=dataset,
+                    metrics=[faithfulness_metric, answer_relevancy_metric],
+                )
 
-            # 提取分数
-            faithfulness_score = result["faithfulness"][0] if "faithfulness" in result else 0.5
-            relevancy_score = result["answer_relevancy"][0] if "answer_relevancy" in result else 0.5
+            # 提取分数（兼容不同版本返回结构）
+            faithfulness_score = self._extract_ragas_metric_value(
+                result,
+                ("faithfulness",),
+            )
+            relevancy_score = self._extract_ragas_metric_value(
+                result,
+                ("answer_relevancy", "answer_relevance"),
+            )
+            if faithfulness_score is None:
+                faithfulness_score = 0.5
+            if relevancy_score is None:
+                relevancy_score = 0.5
 
             # 平均得分
             ragas_score = (faithfulness_score + relevancy_score) / 2
@@ -724,21 +966,85 @@ class AutoEvaluationService:
     def clear_review_queue(self) -> None:
         """清空审查队列"""
         self.needs_review_queue.clear()
+        self._persist_review_queue()
 
-    def approve_sample(self, index: int) -> None:
-        """人工批准某个样本"""
-        if 0 <= index < len(self.needs_review_queue):
-            item = self.needs_review_queue.pop(index)
-            # visualize_only 模式不允许写入训练数据
-            if (not self.config.visualize_only) and (not item.get("routed", False)):
-                self.data_router.route_sample(item["eval_result"])
-            print(f"✅ 样本 {index} 已批准")
+    def _find_review_item_index(self, sample_id: str) -> int:
+        for idx, item in enumerate(self.needs_review_queue):
+            if item.get("sample_id") == sample_id:
+                return idx
+        return -1
 
-    def reject_sample(self, index: int) -> None:
-        """人工拒绝某个样本"""
+    def approve_sample_by_id(self, sample_id: str) -> tuple[bool, str]:
+        """人工批准某个样本（按 sample_id，幂等）。"""
+        if not sample_id:
+            return False, "sample_id is required"
+
+        recorded = self._review_decisions.get(sample_id)
+        if recorded:
+            if recorded.get("decision") == "approved":
+                return True, f"✅ 样本 {sample_id} 已批准（幂等）"
+            return False, f"❌ 样本 {sample_id} 已被拒绝，不能重复批准"
+
+        index = self._find_review_item_index(sample_id)
+        if index < 0:
+            return False, f"样本 {sample_id} 不存在"
+
+        item = self.needs_review_queue.pop(index)
+        if (not self.config.visualize_only) and (not item.get("routed", False)):
+            self.data_router.route_sample(item["eval_result"])
+            item["routed"] = True
+
+        self._review_decisions[sample_id] = {
+            "decision": "approved",
+            "timestamp": datetime.now().isoformat(),
+            "query": item.get("eval_result").query[:120] if item.get("eval_result") else "",
+        }
+        self._persist_review_queue()
+        self._persist_review_decisions()
+        message = f"✅ 样本 {sample_id} 已批准"
+        print(message)
+        return True, message
+
+    def reject_sample_by_id(self, sample_id: str) -> tuple[bool, str]:
+        """人工拒绝某个样本（按 sample_id，幂等）。"""
+        if not sample_id:
+            return False, "sample_id is required"
+
+        recorded = self._review_decisions.get(sample_id)
+        if recorded:
+            if recorded.get("decision") == "rejected":
+                return True, f"❌ 样本 {sample_id} 已拒绝（幂等）"
+            return False, f"⚠️ 样本 {sample_id} 已批准，不能重复拒绝"
+
+        index = self._find_review_item_index(sample_id)
+        if index < 0:
+            return False, f"样本 {sample_id} 不存在"
+
+        item = self.needs_review_queue.pop(index)
+        self._review_decisions[sample_id] = {
+            "decision": "rejected",
+            "timestamp": datetime.now().isoformat(),
+            "query": item.get("eval_result").query[:120] if item.get("eval_result") else "",
+        }
+        self._persist_review_queue()
+        self._persist_review_decisions()
+        message = f"❌ 样本 {sample_id} 已拒绝"
+        print(message)
+        return True, message
+
+    def approve_sample(self, index: int) -> tuple[bool, str]:
+        """人工批准某个样本（兼容 index 方式）。"""
         if 0 <= index < len(self.needs_review_queue):
-            print(f"❌ 样本 {index} 已拒绝")
-            self.needs_review_queue.pop(index)
+            sample_id = self.needs_review_queue[index].get("sample_id")
+            return self.approve_sample_by_id(sample_id)
+        return False, f"样本 index {index} 不存在"
+
+    def reject_sample(self, index: int) -> tuple[bool, str]:
+        """人工拒绝某个样本（兼容 index 方式）。"""
+        if 0 <= index < len(self.needs_review_queue):
+            sample_id = self.needs_review_queue[index].get("sample_id")
+            return self.reject_sample_by_id(sample_id)
+        return False, f"样本 index {index} 不存在"
 
 
 # 全局实例
