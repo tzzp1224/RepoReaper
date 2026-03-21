@@ -11,16 +11,19 @@
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import random
 import time
+import types
 import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
 from dataclasses import asdict, dataclass, field, replace, fields
 from collections import OrderedDict
+from contextlib import contextmanager
 
 from evaluation.evaluation_framework import (
     EvaluationEngine,
@@ -31,7 +34,7 @@ from evaluation.evaluation_framework import (
 from evaluation.models import QueryRewriteMetrics, RetrievalMetrics, GenerationMetrics, AgenticMetrics
 from evaluation.utils import is_chatty_query, has_code_indicators
 from app.services.tracing_service import tracing_service
-from app.core.config import AutoEvaluationConfig, auto_eval_config as default_auto_eval_config
+from app.core.config import AutoEvaluationConfig, auto_eval_config as default_auto_eval_config, settings
 
 
 @dataclass
@@ -55,6 +58,7 @@ class AutoEvalRuntimeMetrics:
     dropped_queue_full: int = 0
     processed: int = 0
     failed: int = 0
+    inflight: int = 0
     visualize_only_observed: int = 0
     queue_wait_ms_total: float = 0.0
     queue_wait_ms_max: float = 0.0
@@ -82,6 +86,7 @@ class AutoEvaluationService:
         self.config = config or replace(default_auto_eval_config)
         self.needs_review_queue: list = []  # 需要人工审查的样本队列
         self._evaluated_keys: OrderedDict[str, None] = OrderedDict()  # 防重复评估（session_id:query_hash）
+        self._pending_eval_keys: set[str] = set()
         self._metrics = AutoEvalRuntimeMetrics()
 
         self._eval_queue: Optional[asyncio.Queue] = None
@@ -359,24 +364,41 @@ class AutoEvaluationService:
 
         return True, None
 
-    def _check_duplicate(self, query: str, session_id: str) -> bool:
-        """检查是否重复评估，返回 True 表示是重复的"""
-        import hashlib
-
+    def _build_eval_key(self, query: str, session_id: str) -> str:
         query_hash = hashlib.md5(query.encode()).hexdigest()[:8]
-        eval_key = f"{session_id}:{query_hash}"
+        return f"{session_id}:{query_hash}"
 
-        if eval_key in self._evaluated_keys:
-            return True
-
+    def _commit_evaluated_key(self, eval_key: str) -> None:
         self._evaluated_keys[eval_key] = None
-
-        # 限制缓存大小，防止内存泄漏
         if len(self._evaluated_keys) > 1000:
             while len(self._evaluated_keys) > 500:
                 self._evaluated_keys.popitem(last=False)
-
         self._persist_evaluated_keys()
+
+    def _reserve_eval_key(self, query: str, session_id: str) -> Optional[str]:
+        """
+        预占评估键（仅内存 pending），避免并发重复评估。
+        终态成功后由 _commit_evaluated_key 持久化。
+        """
+        eval_key = self._build_eval_key(query, session_id)
+        if eval_key in self._evaluated_keys or eval_key in self._pending_eval_keys:
+            return None
+        self._pending_eval_keys.add(eval_key)
+        return eval_key
+
+    def _release_eval_key(self, eval_key: Optional[str]) -> None:
+        if eval_key:
+            self._pending_eval_keys.discard(eval_key)
+
+    def _check_duplicate(self, query: str, session_id: str) -> bool:
+        """
+        兼容旧路径：检查并立即写入去重键。
+        仅用于测试与历史调用；在线评估主流程使用 reserve/commit 两阶段去重。
+        """
+        eval_key = self._build_eval_key(query, session_id)
+        if eval_key in self._evaluated_keys:
+            return True
+        self._commit_evaluated_key(eval_key)
         return False
 
     def _is_ragas_circuit_open(self) -> bool:
@@ -393,9 +415,18 @@ class AutoEvaluationService:
         self._ragas_consecutive_failures = 0
         self._ragas_circuit_open_until = 0.0
 
+    @staticmethod
+    def _normalize_error_reason(reason: Optional[str], fallback: str = "unknown") -> str:
+        raw = (reason or "").strip()
+        if not raw:
+            raw = fallback
+        normalized = raw.replace("\n", " ").replace("\r", " ")
+        return normalized[:120]
+
     def _on_ragas_failure(self, reason: str) -> None:
+        safe_reason = self._normalize_error_reason(reason, fallback="ragas_failed")
         self._metrics.ragas_failures += 1
-        self._metrics.last_error = f"ragas:{reason}"
+        self._metrics.last_error = f"ragas:{safe_reason}"
         if not self.config.ragas_circuit_breaker_enabled:
             return
         self._ragas_consecutive_failures += 1
@@ -432,6 +463,7 @@ class AutoEvaluationService:
                 wait_ms = (time.monotonic() - task.enqueued_at) * 1000
                 self._metrics.queue_wait_ms_total += wait_ms
                 self._metrics.queue_wait_ms_max = max(self._metrics.queue_wait_ms_max, wait_ms)
+                self._metrics.inflight += 1
                 with tracing_service.trace_scope(task.trace_id, session_id=task.session_id):
                     await self.auto_evaluate(
                         query=task.query,
@@ -447,6 +479,8 @@ class AutoEvaluationService:
                 self._metrics.last_error = str(e)
                 print(f"❌ Background eval worker failed: {e}")
             finally:
+                if self._metrics.inflight > 0:
+                    self._metrics.inflight -= 1
                 self._eval_queue.task_done()
 
     async def shutdown(self) -> None:
@@ -489,8 +523,9 @@ class AutoEvaluationService:
             print(f"  ⚠️ [AutoEval] 跳过: {skip_reason}")
             return None
 
-        # 防重复评估
-        if self._check_duplicate(query, session_id):
+        # 防重复评估（两阶段：pending -> terminal commit）
+        eval_key = self._reserve_eval_key(query, session_id)
+        if not eval_key:
             print(f"  ⏭️ [AutoEval] 跳过重复评估: {query[:30]}...")
             return None
 
@@ -547,7 +582,7 @@ class AutoEvaluationService:
                             if ragas_details:
                                 print(f"    - {ragas_details}")
                         else:
-                            self._on_ragas_failure("empty_score")
+                            self._on_ragas_failure(ragas_details or "empty_score")
                     except asyncio.TimeoutError:
                         self._metrics.ragas_timeouts += 1
                         self._on_ragas_failure("timeout")
@@ -604,14 +639,18 @@ class AutoEvaluationService:
                         timestamp=start_time,
                     )
                     print("  ⚠️ 需要人工审查 (needs_review)，等待人工审批后再落盘")
-                elif eval_result.data_quality_tier != DataQualityTier.REJECTED:
-                    print(
-                        f"  ✓ 路由到 data_router "
-                        f"(tier={eval_result.data_quality_tier.value}, score={final_score:.2f})"
-                    )
-                    self.data_router.route_sample(eval_result)
                 else:
-                    print(f"  ❌ 评分过低 (tier=rejected, score={final_score:.2f})，拒绝存储")
+                    self.data_router.route_sample(eval_result)
+                    if eval_result.data_quality_tier == DataQualityTier.REJECTED:
+                        print(f"  ❌ 评分过低 (tier=rejected, score={final_score:.2f})，仅记录审计结果")
+                    else:
+                        print(
+                            f"  ✓ 路由到 data_router "
+                            f"(tier={eval_result.data_quality_tier.value}, score={final_score:.2f})"
+                        )
+
+            # 只有进入终态后才持久化 dedupe key，避免“已去重但无终态记录”。
+            self._commit_evaluated_key(eval_key)
 
             score_metadata = {
                 "session_id": session_id,
@@ -677,6 +716,8 @@ class AutoEvaluationService:
 
             traceback.print_exc()
             return None
+        finally:
+            self._release_eval_key(eval_key)
 
     async def auto_evaluate_async(
         self,
@@ -846,6 +887,50 @@ class AutoEvaluationService:
                 pass
         return None
 
+    @staticmethod
+    def _resolve_ragas_collection_metric(collection_module: Any) -> Optional[Any]:
+        """
+        解析 ragas.metrics.collections.* 导出的 metric 对象。
+        新版某些发行版导出的 `metric` 仍是 module，需要回退旧导入路径。
+        """
+        candidate = getattr(collection_module, "metric", None)
+        if candidate is None or isinstance(candidate, types.ModuleType):
+            return None
+        return candidate
+
+    @contextmanager
+    def _ragas_runtime_env(self):
+        """
+        为 Ragas 运行时补齐 OpenAI 兼容环境变量。
+        - 已配置 OPENAI_API_KEY 时不覆盖。
+        - 在 DeepSeek 场景下映射到 OpenAI 兼容变量，降低接线成本。
+        """
+        overrides: Dict[str, str] = {}
+        if not os.getenv("OPENAI_API_KEY"):
+            provider = settings.LLM_PROVIDER.lower()
+            if provider == "deepseek" and settings.DEEPSEEK_API_KEY:
+                overrides["OPENAI_API_KEY"] = settings.DEEPSEEK_API_KEY
+                if settings.DEEPSEEK_BASE_URL:
+                    overrides["OPENAI_BASE_URL"] = settings.DEEPSEEK_BASE_URL
+            elif provider == "openai" and settings.OPENAI_API_KEY:
+                overrides["OPENAI_API_KEY"] = settings.OPENAI_API_KEY
+                if settings.OPENAI_BASE_URL:
+                    overrides["OPENAI_BASE_URL"] = settings.OPENAI_BASE_URL
+
+        original: Dict[str, Optional[str]] = {}
+        try:
+            for key, value in overrides.items():
+                original[key] = os.environ.get(key)
+                os.environ[key] = value
+            yield
+        finally:
+            for key in overrides:
+                previous = original.get(key)
+                if previous is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = previous
+
     async def _ragas_eval(
         self,
         query: str,
@@ -861,15 +946,25 @@ class AutoEvaluationService:
         try:
             from ragas import evaluate
             from datasets import Dataset
+
+            faithfulness_metric = None
+            answer_relevancy_metric = None
             try:
                 from ragas.metrics.collections import faithfulness as ragas_faithfulness
                 from ragas.metrics.collections import answer_relevancy as ragas_answer_relevancy
-                faithfulness_metric = getattr(ragas_faithfulness, "metric", ragas_faithfulness)
-                answer_relevancy_metric = getattr(ragas_answer_relevancy, "metric", ragas_answer_relevancy)
+                faithfulness_metric = self._resolve_ragas_collection_metric(ragas_faithfulness)
+                answer_relevancy_metric = self._resolve_ragas_collection_metric(ragas_answer_relevancy)
             except ImportError:
-                # 兼容旧版 ragas 指标导入路径
-                from ragas.metrics import faithfulness as faithfulness_metric
-                from ragas.metrics import answer_relevancy as answer_relevancy_metric
+                pass
+
+            # 兼容旧版 ragas 指标导入路径（通常为已初始化的 metric object）
+            if faithfulness_metric is None or answer_relevancy_metric is None:
+                from ragas.metrics import faithfulness as legacy_faithfulness
+                from ragas.metrics import answer_relevancy as legacy_answer_relevancy
+                if faithfulness_metric is None:
+                    faithfulness_metric = legacy_faithfulness
+                if answer_relevancy_metric is None:
+                    answer_relevancy_metric = legacy_answer_relevancy
 
             # 构造 Ragas 数据集（Phase 4：Dataset API）
             dataset_dict = {
@@ -879,20 +974,21 @@ class AutoEvaluationService:
             }
             dataset = Dataset.from_dict(dataset_dict)
 
-            # 执行评估
-            try:
+            def _run_eval(metrics: list[Any]):
+                try:
+                    return evaluate(
+                        dataset=dataset,
+                        metrics=metrics,
+                        show_progress=False,
+                        raise_exceptions=False,
+                    )
+                except TypeError:
+                    return evaluate(dataset=dataset, metrics=metrics)
+
+            with self._ragas_runtime_env():
                 result = await asyncio.to_thread(
-                    evaluate,
-                    dataset=dataset,
-                    metrics=[faithfulness_metric, answer_relevancy_metric],
-                    show_progress=False,
-                    raise_exceptions=False,
-                )
-            except TypeError:
-                result = await asyncio.to_thread(
-                    evaluate,
-                    dataset=dataset,
-                    metrics=[faithfulness_metric, answer_relevancy_metric],
+                    _run_eval,
+                    [faithfulness_metric, answer_relevancy_metric],
                 )
 
             # 提取分数（兼容不同版本返回结构）
@@ -904,10 +1000,23 @@ class AutoEvaluationService:
                 result,
                 ("answer_relevancy", "answer_relevance"),
             )
+
+            # 若双指标均缺失，回退到单指标（faithfulness）保障可用性。
+            if faithfulness_score is None and relevancy_score is None:
+                with self._ragas_runtime_env():
+                    fallback_result = await asyncio.to_thread(_run_eval, [faithfulness_metric])
+                faithfulness_score = self._extract_ragas_metric_value(
+                    fallback_result,
+                    ("faithfulness",),
+                )
+                relevancy_score = faithfulness_score
+
+            if faithfulness_score is None and relevancy_score is None:
+                return None, "empty_score"
             if faithfulness_score is None:
-                faithfulness_score = 0.5
+                faithfulness_score = relevancy_score
             if relevancy_score is None:
-                relevancy_score = 0.5
+                relevancy_score = faithfulness_score
 
             # 平均得分
             ragas_score = (faithfulness_score + relevancy_score) / 2
@@ -918,23 +1027,27 @@ class AutoEvaluationService:
 
         except ImportError:
             print("⚠️ Ragas 未安装，跳过 sanity check")
-            return None, None
+            return None, "ragas_not_installed"
         except Exception as e:
             print(f"⚠️ Ragas 评估异常: {e}")
-            return None, None
+            return None, f"error:{self._normalize_error_reason(str(e))}"
 
     def get_metrics(self) -> Dict[str, Any]:
         """获取可观测指标快照。"""
         payload = asdict(self._metrics)
+        queue_size = self._eval_queue.qsize() if self._eval_queue else 0
+        terminal_count = self._metrics.processed + self._metrics.failed
         payload.update(
             {
                 "queue_enabled": self.config.queue_enabled,
-                "queue_size": self._eval_queue.qsize() if self._eval_queue else 0,
+                "queue_size": queue_size,
                 "queue_maxsize": self._eval_queue.maxsize if self._eval_queue else 0,
                 "worker_running": bool(self._worker_task and not self._worker_task.done()),
                 "visualize_only": self.config.visualize_only,
                 "ragas_circuit_open": self._is_ragas_circuit_open(),
                 "ragas_consecutive_failures": self._ragas_consecutive_failures,
+                "terminal_count": terminal_count,
+                "is_idle": queue_size == 0 and self._metrics.inflight == 0,
             }
         )
         return payload
@@ -945,6 +1058,7 @@ class AutoEvaluationService:
             "queue": {
                 "enabled": self.config.queue_enabled,
                 "size": self._eval_queue.qsize() if self._eval_queue else 0,
+                "inflight": self._metrics.inflight,
                 "maxsize": self._eval_queue.maxsize if self._eval_queue else 0,
                 "drop_when_full": self.config.drop_when_queue_full,
                 "worker_running": bool(self._worker_task and not self._worker_task.done()),

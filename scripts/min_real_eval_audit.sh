@@ -123,8 +123,12 @@ curl -N -sS "$API_BASE/chat" \
   >"$OUT_DIR/chat_round_2.txt"
 
 for _ in $(seq 1 120); do
-  QSIZE="$(curl -sS "$API_BASE/auto-eval/metrics" | jq -r '.metrics.queue_size // 0')"
-  if [ "$QSIZE" = "0" ]; then
+  SNAPSHOT="$(curl -sS "$API_BASE/auto-eval/metrics")"
+  QSIZE="$(printf '%s' "$SNAPSHOT" | jq -r '.metrics.queue_size // 0')"
+  INFLIGHT="$(printf '%s' "$SNAPSHOT" | jq -r '.metrics.inflight // 0')"
+  ENQ="$(printf '%s' "$SNAPSHOT" | jq -r '.metrics.enqueued // 0')"
+  TERM="$(printf '%s' "$SNAPSHOT" | jq -r '(.metrics.processed // 0) + (.metrics.failed // 0)')"
+  if [ "$QSIZE" = "0" ] && [ "$INFLIGHT" = "0" ] && [ "$TERM" -ge "$ENQ" ]; then
     break
   fi
   sleep 1

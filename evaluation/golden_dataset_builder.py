@@ -259,10 +259,13 @@ def validate_golden_dataset(filepath: str = "evaluation/golden_dataset.json") ->
         "missing_fields": [],
         "empty_queries": [],
         "empty_files": [],
-        "duplicates": []
+        "empty_expected_answers": [],
+        "duplicates": [],
+        "duplicate_ids": []
     }
     
     seen_queries = set()
+    seen_ids = set()
     
     for i, sample in enumerate(builder.samples):
         # 检查必填字段
@@ -271,11 +274,18 @@ def validate_golden_dataset(filepath: str = "evaluation/golden_dataset.json") ->
         
         if not sample.expected_files or all(not f for f in sample.expected_files):
             issues["empty_files"].append(f"Sample {i}: expected_files is empty")
+
+        if not sample.expected_answer or not sample.expected_answer.strip():
+            issues["empty_expected_answers"].append(f"Sample {i}: expected_answer is empty")
         
         # 检查重复
         if sample.query in seen_queries:
             issues["duplicates"].append(f"Sample {i}: duplicate query")
         seen_queries.add(sample.query)
+
+        if sample.id in seen_ids:
+            issues["duplicate_ids"].append(f"Sample {i}: duplicate id '{sample.id}'")
+        seen_ids.add(sample.id)
     
     return {
         "valid": len(issues) == 0 or not any(issues.values()),

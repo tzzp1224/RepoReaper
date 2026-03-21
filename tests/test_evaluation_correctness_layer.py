@@ -327,6 +327,132 @@ def test_needs_review_reject_does_not_route(tmp_path, monkeypatch):
     assert len(service.get_review_queue()) == 0
 
 
+def test_rejected_sample_is_persisted_for_audit(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    os.environ.setdefault("LLM_PROVIDER", "openai")
+    os.environ.setdefault("OPENAI_API_KEY", "dummy")
+
+    import app.services.auto_evaluation_service as auto_eval_module
+    from app.services.auto_evaluation_service import AutoEvaluationService, EvaluationConfig
+
+    monkeypatch.setattr(auto_eval_module.tracing_service, "add_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auto_eval_module.tracing_service, "record_score", lambda *args, **kwargs: None)
+
+    class FakeEvalEngine:
+        async def evaluate_generation(self, **kwargs):
+            # 0.30 -> rejected
+            return _make_generation_metrics(
+                score=0.3,
+                query=kwargs["query"],
+                context=kwargs["retrieved_context"],
+                answer=kwargs["generated_answer"],
+            )
+
+    router = DataRoutingEngine(output_dir=str(tmp_path / "sft"))
+    service = AutoEvaluationService(
+        eval_engine=FakeEvalEngine(),
+        data_router=router,
+        config=EvaluationConfig(
+            enabled=True,
+            use_ragas=False,
+            async_evaluation=False,
+            min_query_length=1,
+            min_answer_length=1,
+            require_repo_url=False,
+            require_code_in_context=False,
+            visualize_only=False,
+        ),
+    )
+
+    tier = asyncio.run(
+        service.auto_evaluate(
+            query="why rejected",
+            retrieved_context="def x(): pass",
+            generated_answer="A" * 180,
+            session_id="sid-rejected",
+            repo_url="https://github.com/a/b",
+        )
+    )
+
+    assert tier == DataQualityTier.REJECTED.value
+    assert _line_count(router.eval_results_file) == 1
+    assert _line_count(router.positive_samples_file) == 0
+    assert _line_count(router.negative_samples_file) == 0
+
+
+def test_dedupe_key_is_committed_only_after_terminal_success(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    os.environ.setdefault("LLM_PROVIDER", "openai")
+    os.environ.setdefault("OPENAI_API_KEY", "dummy")
+
+    import app.services.auto_evaluation_service as auto_eval_module
+    from app.services.auto_evaluation_service import AutoEvaluationService, EvaluationConfig
+
+    monkeypatch.setattr(auto_eval_module.tracing_service, "add_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auto_eval_module.tracing_service, "record_score", lambda *args, **kwargs: None)
+
+    class FlakyEvalEngine:
+        def __init__(self):
+            self.calls = 0
+
+        async def evaluate_generation(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("transient_failure")
+            return _make_generation_metrics(
+                score=0.8,
+                query=kwargs["query"],
+                context=kwargs["retrieved_context"],
+                answer=kwargs["generated_answer"],
+            )
+
+    router = DataRoutingEngine(output_dir=str(tmp_path / "sft"))
+    engine = FlakyEvalEngine()
+    service = AutoEvaluationService(
+        eval_engine=engine,
+        data_router=router,
+        config=EvaluationConfig(
+            enabled=True,
+            use_ragas=False,
+            async_evaluation=False,
+            min_query_length=1,
+            min_answer_length=1,
+            require_repo_url=False,
+            require_code_in_context=False,
+            visualize_only=False,
+        ),
+    )
+
+    # 第一次失败：不应持久化 dedupe key，应允许重试
+    first = asyncio.run(
+        service.auto_evaluate(
+            query="same-query",
+            retrieved_context="def x(): pass",
+            generated_answer="A" * 180,
+            session_id="sid-dedupe",
+            repo_url="https://github.com/a/b",
+        )
+    )
+    assert first is None
+    assert len(service._evaluated_keys) == 0
+
+    # 第二次重试应执行成功并落盘 dedupe key
+    second = asyncio.run(
+        service.auto_evaluate(
+            query="same-query",
+            retrieved_context="def x(): pass",
+            generated_answer="A" * 180,
+            session_id="sid-dedupe",
+            repo_url="https://github.com/a/b",
+        )
+    )
+    assert second in {"gold", "silver", "bronze", "rejected"}
+    assert engine.calls == 2
+    assert service._check_duplicate("same-query", "sid-dedupe") is True
+
+
 def test_retrieval_script_drift_fixed():
     with open("evaluation/test_retrieval.py", "r", encoding="utf-8") as f:
         content = f.read()

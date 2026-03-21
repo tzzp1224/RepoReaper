@@ -1,343 +1,681 @@
 [
   {
-    "id": "0",
-    "description": "Routing: 位于 routing.py 极深处，硬切分必死",
-    "query": "Where is the function 'serialize_response' implementation used for handling response content?",
+    "id": "sample_0000",
+    "description": "输入校验顺序：空/短/闲聊判定优先级",
+    "query": "auto_evaluate 里 query 校验的顺序是什么？",
     "expected_files": [
-      "fastapi/routing.py"
+      "app/services/auto_evaluation_service.py",
+      "evaluation/utils.py"
     ],
-    "expected_answer": "",
+    "expected_answer": "_validate_input 先检查 query 是否为空，再检查长度是否小于 min_query_length，然后调用 is_chatty_query；任一命中都会写 skipped_samples 并返回 False。",
     "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
+    "category": "workflow",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
   },
   {
-    "id": "0",
-    "description": "Routing: 同样位于 routing.py 后半部分",
-    "query": "Show me the 'get_request_handler' method implementation inside APIRoute.",
+    "id": "sample_0001",
+    "description": "闲聊规则的误伤风险（what is 前缀）",
+    "query": "为什么 'what is auth middleware flow' 可能被判定为闲聊？",
     "expected_files": [
-      "fastapi/routing.py"
+      "evaluation/utils.py"
     ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
+    "expected_answer": "is_chatty_query 会把 query_lower 以 'what is ' 开头的句子判为 chatty，因为 CHATTY_PATTERNS 包含 'what is'，并且匹配规则是 query_lower.startswith(pattern + ' ')。",
+    "difficulty": "hard",
+    "category": "architecture",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
   },
   {
-    "id": "0",
-    "description": "Dependency: 核心逻辑，位于 dependencies/utils.py 中后部",
-    "query": "I need the code for 'solve_dependencies' function.",
+    "id": "sample_0002",
+    "description": "缺少 repo_url 的硬门禁",
+    "query": "AUTO_EVAL_REQUIRE_REPO_URL 打开时，repo_url 为空会怎样？",
     "expected_files": [
-      "fastapi/dependencies/utils.py"
+      "app/services/auto_evaluation_service.py",
+      "app/core/config.py"
     ],
-    "expected_answer": "",
+    "expected_answer": "当 require_repo_url=True 且 repo_url 为空时，_validate_input 会记录 missing_repo_url 并返回 False；auto_evaluate 会直接跳过，不进入打分。",
     "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
+    "category": "workflow",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
   },
   {
-    "id": "0",
-    "description": "Dependency: 极易混淆，get_dependant 在多处被引用，只需定义处",
-    "query": "Where is 'get_dependant' function defined?",
+    "id": "sample_0003",
+    "description": "回答长度阈值边界",
+    "query": "回答太短在什么条件下会被 auto-eval 直接跳过？",
     "expected_files": [
-      "fastapi/dependencies/utils.py"
+      "app/services/auto_evaluation_service.py",
+      "app/core/config.py"
     ],
-    "expected_answer": "",
-    "difficulty": "medium",
+    "expected_answer": "_validate_input 要求 generated_answer.strip() 长度 >= min_answer_length；默认阈值由 AUTO_EVAL_MIN_ANSWER_LENGTH 控制，默认是 100。低于阈值会记录 answer_too_short 并跳过。",
+    "difficulty": "easy",
     "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
   },
   {
-    "id": "0",
-    "description": "OpenAPI: 位于 openapi/utils.py 深处的辅助函数",
-    "query": "Find the function 'get_flat_models_from_routes'.",
+    "id": "sample_0004",
+    "description": "代码上下文判定规则（子串启发式）",
+    "query": "上下文是否包含代码是怎么判断的？有哪些指示符？",
     "expected_files": [
-      "fastapi/openapi/utils.py"
+      "evaluation/utils.py",
+      "app/services/auto_evaluation_service.py"
     ],
-    "expected_answer": "",
+    "expected_answer": "has_code_indicators 通过简单子串匹配判断，指示符包含 'def '、'class '、'import '、'function '、'public '、'func '、'```' 等；require_code_in_context 打开时，未命中会被 no_code_in_context 跳过。",
     "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
+    "category": "architecture",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
   },
   {
-    "id": "0",
-    "description": "OpenAPI: 另一个深层函数",
-    "query": "Where is 'get_openapi_security_definitions' defined?",
+    "id": "sample_0005",
+    "description": "去重键算法：session + query hash",
+    "query": "How is the auto-eval dedupe key generated?",
     "expected_files": [
-      "fastapi/openapi/utils.py"
+      "app/services/auto_evaluation_service.py"
     ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "0",
-    "description": "Utils: generate_unique_id 也是一个小工具",
-    "query": "Where is the 'generate_unique_id' function?",
-    "expected_files": [
-      "fastapi/utils.py"
-    ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "0",
-    "description": "Utils: create_cloned_field 位于 utils.py 底部",
-    "query": "Show me 'create_cloned_field' implementation.",
-    "expected_files": [
-      "fastapi/utils.py"
-    ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "0",
-    "description": "Param: 区分 params.py 和 models.py",
-    "query": "Where is the 'Security' class defined for dependency injection?",
-    "expected_files": [
-      "fastapi/security/base.py"
-    ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "0",
-    "description": "Encoder: 位于 encoders.py 底部，处理 dataclass 的逻辑",
-    "query": "How does jsonable_encoder handle dataclasses? Show code.",
-    "expected_files": [
-      "fastapi/encoders.py"
-    ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "0",
-    "description": "Exception: 这是一个非常具体的处理函数",
-    "query": "Where is 'request_validation_exception_handler' defined?",
-    "expected_files": [
-      "fastapi/exception_handlers.py"
-    ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "0",
-    "description": "Background: 后台任务的具体类",
-    "query": "Where is the 'BackgroundTasks' class definition?",
-    "expected_files": [
-      "fastapi/background.py"
-    ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "0",
-    "description": "Datastructures: 这是一个继承自 Starlette 的类",
-    "query": "Where is 'UploadFile' class defined in FastAPI source?",
-    "expected_files": [
-      "fastapi/datastructures.py"
-    ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "0",
-    "description": "Response: 自定义响应类，容易被混淆",
-    "query": "Where is 'ORJSONResponse' defined?",
-    "expected_files": [
-      "fastapi/responses.py"
-    ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "0",
-    "description": "App: 位于 applications.py 底部",
-    "query": "Where is the 'include_router' method of FastAPI class?",
-    "expected_files": [
-      "fastapi/applications.py"
-    ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "0",
-    "description": "Concurrency: iterate_in_threadpool 实现",
-    "query": "Show me 'iterate_in_threadpool' function.",
-    "expected_files": [
-      "fastapi/concurrency.py"
-    ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "0",
-    "description": "Meta: 这里的 Dunder method 很难搜",
-    "query": "Where is the __call__ method of FastAPI application?",
-    "expected_files": [
-      "fastapi/applications.py"
-    ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "0",
-    "description": "TestClient: 测试客户端的具体实现",
-    "query": "Where is TestClient defined?",
-    "expected_files": [
-      "fastapi/testclient.py"
-    ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "0",
-    "description": "Typing: 辅助类型定义",
-    "query": "Where is the 'DecoratedCallable' type defined?",
-    "expected_files": [
-      "fastapi/types.py"
-    ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "0",
-    "description": "Main: 极具迷惑性，FastAPI 经常被 import 到各处",
-    "query": "Where is the actual definition of the FastAPI class?",
-    "expected_files": [
-      "fastapi/applications.py"
-    ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "general",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
-  },
-  {
-    "id": "sample_0020",
-    "description": "检索核心逻辑",
-    "query": "How is chunk_file method implemented?",
-    "expected_files": [
-      "app/services/chunking_service.py"
-    ],
-    "expected_answer": "The chunk_file method is implemented in chunking_service.py. It takes content and file_path as parameters and uses AST parsing for Python files to intelligently chunk the code.",
+    "expected_answer": "_build_eval_key computes md5(query).hexdigest()[:8] and prefixes it with session_id, producing '<session_id>:<8-char-hash>'.",
     "difficulty": "easy",
     "category": "code_finding",
     "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0006",
+    "description": "两阶段去重：只在终态成功后 commit",
+    "query": "两阶段去重里，为什么第一次评估失败后还能重试同一个 query？",
+    "expected_files": [
+      "app/services/auto_evaluation_service.py",
+      "tests/test_evaluation_correctness_layer.py"
+    ],
+    "expected_answer": "主流程先 _reserve_eval_key 放到 pending；只有评估进入终态成功后才 _commit_evaluated_key 持久化。异常路径不会 commit，所以失败后可重试；测试 test_dedupe_key_is_committed_only_after_terminal_success 覆盖了这个行为。",
+    "difficulty": "hard",
+    "category": "workflow",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0007",
+    "description": "去重缓存裁剪策略",
+    "query": "What happens when evaluated dedupe keys exceed 1000 entries?",
+    "expected_files": [
+      "app/services/auto_evaluation_service.py",
+      "tests/test_auto_eval_observability_p0.py"
+    ],
+    "expected_answer": "_commit_evaluated_key trims the OrderedDict from >1000 down to 500 by popping oldest entries. test_duplicate_cache_eviction_is_deterministic verifies this deterministic eviction behavior.",
+    "difficulty": "medium",
+    "category": "architecture",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0008",
+    "description": "Ragas 抽样跳过逻辑",
+    "query": "AUTO_EVAL_RAGAS_SAMPLE_RATE=0 时会不会调用 _ragas_eval？",
+    "expected_files": [
+      "app/services/auto_evaluation_service.py",
+      "tests/test_auto_eval_observability_p0.py"
+    ],
+    "expected_answer": "不会。_should_sample_ragas 基于 random.random() < sample_rate；sample_rate=0 时恒为 False，流程只增加 ragas_skipped_sampling 计数。对应测试是 test_ragas_sampling_zero_skips_ragas_call。",
+    "difficulty": "medium",
+    "category": "workflow",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0009",
+    "description": "Ragas 超时触发熔断",
+    "query": "Ragas 超时后熔断器是如何打开的？",
+    "expected_files": [
+      "app/services/auto_evaluation_service.py",
+      "app/core/config.py",
+      "tests/test_auto_eval_observability_p0.py"
+    ],
+    "expected_answer": "_ragas_eval 被 asyncio.wait_for 包裹，超时会调用 _on_ragas_failure('timeout')。当连续失败次数达到 ragas_cb_fail_threshold 时，_ragas_circuit_open_until 会设置为当前时间 + ragas_cb_reset_sec；测试 test_ragas_timeout_triggers_circuit_breaker 验证了该路径。",
+    "difficulty": "hard",
+    "category": "workflow",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0010",
+    "description": "队列满时丢弃策略",
+    "query": "When async auto-eval queue is full and drop_when_queue_full is true, what is recorded?",
+    "expected_files": [
+      "app/services/auto_evaluation_service.py",
+      "tests/test_auto_eval_observability_p0.py"
+    ],
+    "expected_answer": "auto_evaluate_async catches asyncio.QueueFull, increments dropped_queue_full, and emits an 'auto_evaluation_dropped' tracing event with reason='queue_full'.",
+    "difficulty": "medium",
+    "category": "workflow",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0011",
+    "description": "无 Ragas 分数时的最终得分规则",
+    "query": "如果 ragas_score 为 None，最终分数怎么算？",
+    "expected_files": [
+      "app/services/auto_evaluation_service.py"
+    ],
+    "expected_answer": "_compute_final_score 在 ragas_score is None 时直接返回 (custom_score, 'normal')，不会做加权融合。",
+    "difficulty": "easy",
+    "category": "general",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0012",
+    "description": "needs_review 触发条件",
+    "query": "What exact condition marks a sample as needs_review?",
+    "expected_files": [
+      "app/services/auto_evaluation_service.py",
+      "app/core/config.py"
+    ],
+    "expected_answer": "In _compute_final_score, if abs(custom_score - ragas_score) > diff_threshold, status becomes 'needs_review' and the sample is queued for manual review.",
+    "difficulty": "easy",
+    "category": "architecture",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0013",
+    "description": "high_confidence 判定边界",
+    "query": "high_confidence 状态在什么条件下出现？",
+    "expected_files": [
+      "app/services/auto_evaluation_service.py"
+    ],
+    "expected_answer": "只有 custom_score > 0.75 且 ragas_score > 0.75 时，_compute_final_score 才把状态设为 high_confidence。",
+    "difficulty": "easy",
+    "category": "general",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0014",
+    "description": "Ragas Dataset API 真实 payload 结构",
+    "query": "_ragas_eval 构造的 Dataset 字段有哪些？",
+    "expected_files": [
+      "app/services/auto_evaluation_service.py",
+      "tests/test_auto_eval_observability_p0.py"
+    ],
+    "expected_answer": "_ragas_eval 使用 Dataset.from_dict 构造 {'question': [query], 'contexts': [[context]], 'answer': [answer]}。测试 test_ragas_eval_uses_dataset_api_phase4 断言了 question payload。",
+    "difficulty": "medium",
+    "category": "code_finding",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0015",
+    "description": "session_id 清洗与非法 ID 保护",
+    "query": "VectorStore 如何处理带非法字符的 session_id？",
+    "expected_files": [
+      "app/services/vector_service.py"
+    ],
+    "expected_answer": "_sanitize_id 使用正则移除非 [a-zA-Z0-9_-] 字符；如果清洗后为空字符串会抛 ValueError('Invalid session_id')。",
+    "difficulty": "easy",
+    "category": "general",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0016",
+    "description": "混合检索候选集大小（oversample）",
+    "query": "In hybrid search, how is candidate_k derived from top_k?",
+    "expected_files": [
+      "app/services/vector_service.py",
+      "app/core/config.py"
+    ],
+    "expected_answer": "search_hybrid sets candidate_k = top_k * config.search_oversample. The default search_oversample in VectorServiceConfig is 2.",
+    "difficulty": "easy",
+    "category": "architecture",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0017",
+    "description": "BM25 空 token 回退",
+    "query": "当 query 分词后为空时，BM25 分支会怎么做？",
+    "expected_files": [
+      "app/services/vector_service.py"
+    ],
+    "expected_answer": "search_hybrid 在 tokens 为空时会把 tokens 设为 ['']，然后继续调用 BM25 get_scores，避免直接异常退出。",
+    "difficulty": "medium",
+    "category": "architecture",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0018",
+    "description": "BM25 负分/零分过滤",
+    "query": "Why can BM25 return fewer than candidate_k results even after ranking indices?",
+    "expected_files": [
+      "app/services/vector_service.py"
+    ],
+    "expected_answer": "After selecting top_indices, the code only appends entries with scores[idx] > 0. Non-positive scores are dropped, so bm25_results can be shorter than candidate_k.",
+    "difficulty": "medium",
+    "category": "architecture",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0019",
+    "description": "RRF 融合参数来源",
+    "query": "RRF 融合里 vector 和 BM25 的权重分别是多少？",
+    "expected_files": [
+      "app/services/vector_service.py",
+      "app/core/config.py"
+    ],
+    "expected_answer": "_rrf_fusion 使用 config.rrf_weight_vector 和 config.rrf_weight_bm25；默认值在 VectorServiceConfig 中是 1.0 和 0.3，k 值是 60。",
+    "difficulty": "easy",
+    "category": "architecture",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0020",
+    "description": "按文件回取文档的稳定顺序",
+    "query": "How are chunks ordered when get_documents_by_file returns a file's documents?",
+    "expected_files": [
+      "app/services/vector_service.py"
+    ],
+    "expected_answer": "get_documents_by_file sorts matching docs by metadata['start_line'] (default 0), then formats them into compatibility dictionaries.",
+    "difficulty": "easy",
+    "category": "code_finding",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
   },
   {
     "id": "sample_0021",
-    "description": "向量搜索机制",
-    "query": "What vector database is used for retrieval?",
+    "description": "reset 行为：状态和缓存清理",
+    "query": "VectorStore.reset 会清理哪些状态？",
     "expected_files": [
       "app/services/vector_service.py"
     ],
-    "expected_answer": "",
+    "expected_answer": "reset 会删除 Qdrant collection 并重新 initialize，还会删除本地 context/cache 文件，清空 _bm25、_doc_store、_indexed_files、repo_url、global_context。",
     "difficulty": "medium",
-    "category": "architecture",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
+    "category": "workflow",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
   },
   {
     "id": "sample_0022",
-    "description": "完整分析流程",
-    "query": "How does the agent analyze a GitHub repository?",
+    "description": "分块策略选择（按后缀）",
+    "query": "UniversalChunker 如何根据文件类型选择分块算法？",
     "expected_files": [
-      "app/services/agent_service.py",
-      "app/services/chunking_service.py",
-      "app/services/vector_service.py"
+      "app/services/chunking_service.py"
     ],
-    "expected_answer": "",
-    "difficulty": "hard",
-    "category": "workflow",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
+    "expected_answer": "chunk_file 先按扩展名分流：.py 走 _chunk_python；常见 C-style 语言（.java/.js/.ts/.go/.cpp 等）走 _chunk_c_style；其他走 _fallback_chunking。",
+    "difficulty": "easy",
+    "category": "code_finding",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
   },
   {
     "id": "sample_0023",
-    "description": "向量检索质量",
-    "query": "What retrieval metrics are tracked?",
+    "description": "Python AST 失败回退",
+    "query": "What happens if Python code cannot be parsed by ast.parse during chunking?",
     "expected_files": [
-      "evaluation/evaluation_framework.py"
+      "app/services/chunking_service.py"
     ],
-    "expected_answer": "",
-    "difficulty": "medium",
-    "category": "architecture",
+    "expected_answer": "_chunk_python catches SyntaxError from ast.parse and directly falls back to _fallback_chunking.",
+    "difficulty": "easy",
+    "category": "general",
     "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
+    "created_at": "2026-03-21T00:00:00"
   },
   {
     "id": "sample_0024",
-    "description": "Agent决策过程",
-    "query": "How does the agent decide which files to read?",
+    "description": "小函数丢失风险（min_chunk_size）",
+    "query": "为什么很短的 Python 函数可能不会单独成为 chunk？",
     "expected_files": [
-      "app/services/agent_service.py"
+      "app/services/chunking_service.py"
     ],
-    "expected_answer": "",
+    "expected_answer": "_chunk_python 仅在 len(func_code) >= min_chunk_size 时为函数创建 chunk，默认 min_chunk_size 是 50 字符，因此极短函数可能被忽略。",
     "difficulty": "hard",
-    "category": "workflow",
-    "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
+    "category": "architecture",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
   },
   {
     "id": "sample_0025",
-    "description": "错误处理",
-    "query": "Where are network timeout errors handled?",
+    "description": "大类拆分为方法级 chunk",
+    "query": "How does chunker handle an oversized Python class?",
     "expected_files": [
-      "app/services/agent_service.py",
-      "app/services/chat_service.py"
+      "app/services/chunking_service.py"
     ],
-    "expected_answer": "",
+    "expected_answer": "If class code length exceeds max_chunk_size, _chunk_python calls _chunk_large_python_class, which emits method-level chunks with a synthetic class context header.",
+    "difficulty": "medium",
+    "category": "workflow",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0026",
+    "description": "类变量收集只到首个方法前",
+    "query": "_chunk_large_python_class 收集类变量时的停止条件是什么？",
+    "expected_files": [
+      "app/services/chunking_service.py"
+    ],
+    "expected_answer": "它遍历 class_node.body 收集 Assign/AnnAssign，但一旦遇到第一个 FunctionDef/AsyncFunctionDef 就 break，所以首个方法之后定义的类级变量不会进入 header。",
+    "difficulty": "hard",
+    "category": "architecture",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0027",
+    "description": "全局上下文注入与溢出行为",
+    "query": "When global context is too long in C-style chunking, is it injected into every chunk?",
+    "expected_files": [
+      "app/services/chunking_service.py"
+    ],
+    "expected_answer": "No. _chunk_c_style injects global context header only if its length <= max_context_chars. Otherwise it creates a separate 'global_context' chunk and does not prepend the long header to each chunk.",
+    "difficulty": "medium",
+    "category": "architecture",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0028",
+    "description": "纯脚本超长回退",
+    "query": "纯 Python 脚本没有函数/类时，何时会走按行切分回退？",
+    "expected_files": [
+      "app/services/chunking_service.py"
+    ],
+    "expected_answer": "当 has_core_code=False 且 full_script 长度超过 max_chunk_size * 1.5 时，_chunk_python 会调用 _fallback_chunking，而不是把脚本塞成一个大 chunk。",
+    "difficulty": "medium",
+    "category": "workflow",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0029",
+    "description": "C-style 结构扫描的抗干扰 token",
+    "query": "C-style chunking 在扫描结构块时会忽略哪些 token？",
+    "expected_files": [
+      "app/services/chunking_service.py"
+    ],
+    "expected_answer": "_chunk_c_style 的 token_pattern 会识别注释、字符串、字符、模板字符串、宏等；扫描阶段对这些 kind 直接 continue，只用 '{' 和 '}' 维护结构层级。",
+    "difficulty": "medium",
+    "category": "architecture",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0030",
+    "description": "函数名提取对关键字过滤",
+    "query": "How does _extract_c_style_metadata avoid treating control statements as function names?",
+    "expected_files": [
+      "app/services/chunking_service.py"
+    ],
+    "expected_answer": "It scans '\\b([a-zA-Z0-9_]+)\\s*\\(' matches but skips names in {'if','for','while','switch','catch','return','sizeof'} before returning function metadata.",
     "difficulty": "medium",
     "category": "code_finding",
     "language": "en",
-    "created_at": "2026-01-28T14:44:03.813569"
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0031",
+    "description": "最终兜底按固定行数切分",
+    "query": "fallback chunking 的默认行窗口是多少？",
+    "expected_files": [
+      "app/services/chunking_service.py"
+    ],
+    "expected_answer": "_fallback_chunking 以 config.fallback_line_size 为窗口按行切分；默认 fallback_line_size 是 100 行。",
+    "difficulty": "easy",
+    "category": "general",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0032",
+    "description": "chunk 元数据结构",
+    "query": "_create_chunk 返回的 metadata 包含哪些关键字段？",
+    "expected_files": [
+      "app/services/chunking_service.py"
+    ],
+    "expected_answer": "_create_chunk 返回 metadata: {file, type, name, start_line, class}，其中 class 字段默认为空字符串。",
+    "difficulty": "easy",
+    "category": "code_finding",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0033",
+    "description": "查询重写输出格式",
+    "query": "_rewrite_query 对 LLM 返回的关键词列表做了什么处理？",
+    "expected_files": [
+      "app/services/chat_service.py"
+    ],
+    "expected_answer": "_rewrite_query 期望 LLM 返回 JSON 字符串列表；解析成功后用空格把关键词 join 成一个查询字符串，供 BM25/向量检索使用。",
+    "difficulty": "easy",
+    "category": "workflow",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0034",
+    "description": "查询重写失败降级",
+    "query": "What is the fallback behavior when query rewrite fails to parse JSON?",
+    "expected_files": [
+      "app/services/chat_service.py"
+    ],
+    "expected_answer": "If any exception occurs in _rewrite_query (API failure or JSON parse failure), it logs a warning and returns the original user_query unchanged.",
+    "difficulty": "easy",
+    "category": "general",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0035",
+    "description": "JIT 文件请求提取与去重",
+    "query": "聊天流里 <tool_code> 标签提取后如何去重和清洗文件名？",
+    "expected_files": [
+      "app/services/chat_service.py"
+    ],
+    "expected_answer": "process_chat_stream 用正则提取 <tool_code>...</tool_code>，并清除引号和反引号；只有不在 all_loaded_files 和 all_failed_files 中的路径才会加入 requested_files。",
+    "difficulty": "medium",
+    "category": "workflow",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0036",
+    "description": "JIT 轮次与每轮文件上限",
+    "query": "What are the hard limits for JIT rounds and files per round in chat service?",
+    "expected_files": [
+      "app/services/chat_service.py"
+    ],
+    "expected_answer": "ChatConfig sets max_jit_rounds=2 and max_files_per_round=3. process_chat_stream enforces these limits during iterative file loading.",
+    "difficulty": "easy",
+    "category": "architecture",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0037",
+    "description": "上下文拼装的截断粒度",
+    "query": "_build_context 的截断是按总上下文长度还是按单文档长度？",
+    "expected_files": [
+      "app/services/chat_service.py"
+    ],
+    "expected_answer": "_build_context 对每个 doc 的 content 做 [:max_chars] 截断（默认 2000），是按单文档截断，没有对拼接后的总 context 做统一上限控制。",
+    "difficulty": "hard",
+    "category": "architecture",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0038",
+    "description": "对话历史窗口与单条截断",
+    "query": "_build_conversation_context 如何限制历史消息体量？",
+    "expected_files": [
+      "app/services/chat_service.py"
+    ],
+    "expected_answer": "它最多取 history_messages 的最后 6 条（约 3 轮），并把每条内容截断到 500 字符；超长时追加 '...'。",
+    "difficulty": "medium",
+    "category": "workflow",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0039",
+    "description": "Repo Map 初始优先文件筛选规则",
+    "query": "generate_repo_map 是如何筛选 priority_files 的？",
+    "expected_files": [
+      "app/services/agent_service.py",
+      "app/core/config.py"
+    ],
+    "expected_answer": "priority_files 需满足后缀在 agent_config.priority_exts 内，且路径深度 <=2 或路径名包含 priority_keywords；随后去重排序并按 limit 截断。",
+    "difficulty": "medium",
+    "category": "architecture",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0040",
+    "description": "首轮强制加入 README",
+    "query": "In agent analysis round 1, when is README.md force-inserted into selected files?",
+    "expected_files": [
+      "app/services/agent_service.py"
+    ],
+    "expected_answer": "After LLM file selection, if round_idx==0 and a README.md exists and is not already selected/visited, the code inserts it at the start of valid_files.",
+    "difficulty": "medium",
+    "category": "workflow",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0041",
+    "description": "上下文摘要双层截断",
+    "query": "agent 分析里 context_summary 在哪里被截断？",
+    "expected_files": [
+      "app/services/agent_service.py",
+      "app/core/config.py"
+    ],
+    "expected_answer": "每轮聚合后先把 context_summary 截断到 agent_config.max_context_length（默认 20000）；保存到 global_context 时又将 summary 字段再截断到前 8000 字符。",
+    "difficulty": "hard",
+    "category": "architecture",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0042",
+    "description": "报告增强检索的固定 query 集",
+    "query": "What fixed enrichment queries are used before report generation?",
+    "expected_files": [
+      "app/services/agent_service.py"
+    ],
+    "expected_answer": "The enrichment step uses five fixed queries: main entry point/startup, core business logic, API routes/endpoints, database models/schema, and authentication/authorization middleware.",
+    "difficulty": "medium",
+    "category": "workflow",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0043",
+    "description": "查询重写语义分的基线偏移",
+    "query": "evaluate_query_rewrite 的 semantic_preservation 是如何计算的？",
+    "expected_files": [
+      "evaluation/evaluation_framework.py"
+    ],
+    "expected_answer": "evaluate_query_rewrite 把 semantic_preservation 设为 min(1.0, coverage + 0.2)，因此即使 coverage=0 也会得到 0.2 的基础分。",
+    "difficulty": "hard",
+    "category": "architecture",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0044",
+    "description": "检索完整性分的反直觉惩罚",
+    "query": "Why does retrieval chunk_integrity decrease when more files are retrieved?",
+    "expected_files": [
+      "evaluation/evaluation_framework.py"
+    ],
+    "expected_answer": "evaluate_retrieval defines chunk_integrity as min(1.0, 1.0 / len(retrieved_set)); with more retrieved files, this value shrinks, which can penalize broader retrieval.",
+    "difficulty": "hard",
+    "category": "architecture",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0045",
+    "description": "完整性评分仅按长度分段",
+    "query": "_judge_completeness 的分段阈值具体是多少？",
+    "expected_files": [
+      "evaluation/evaluation_framework.py"
+    ],
+    "expected_answer": "_judge_completeness 仅根据回答长度打分：<50 给 0.3，<200 给 0.6，其余给 0.9。",
+    "difficulty": "easy",
+    "category": "general",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0046",
+    "description": "无代码块时 code_correctness 默认满分",
+    "query": "If generated answer has no fenced code blocks, what score does _check_code_correctness return?",
+    "expected_files": [
+      "evaluation/evaluation_framework.py"
+    ],
+    "expected_answer": "_check_code_correctness returns 1.0 when code_samples is empty, so non-code answers are treated as fully correct for this sub-metric.",
+    "difficulty": "medium",
+    "category": "general",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0047",
+    "description": "质量分级阈值与边界",
+    "query": "DataQualityTier.from_score 的阈值边界是怎么定义的？",
+    "expected_files": [
+      "evaluation/models.py"
+    ],
+    "expected_answer": "from_score 使用固定阈值：>=0.9 为 gold，>=0.7 为 silver，>=0.5 为 bronze，否则 rejected。",
+    "difficulty": "easy",
+    "category": "general",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0048",
+    "description": "综合评分权重按存在层归一化",
+    "query": "How does EvaluationResult.compute_overall_score weight available layers?",
+    "expected_files": [
+      "evaluation/models.py"
+    ],
+    "expected_answer": "compute_overall_score adds only present layer scores with weights query_rewrite 0.15, retrieval 0.35, generation 0.4, agentic 0.1, then normalizes by total present weight before applying tier.",
+    "difficulty": "medium",
+    "category": "architecture",
+    "language": "en",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0049",
+    "description": "路由规则：REJECTED 仅审计不入 SFT",
+    "query": "route_data 对 gold/silver/bronze/rejected 分别如何落盘？",
+    "expected_files": [
+      "evaluation/data_router.py"
+    ],
+    "expected_answer": "route_data 总是先把评估结果写入 eval_results.jsonl；gold/silver 写 positive_samples.jsonl，bronze 写 negative_samples.jsonl，rejected 不写任何 SFT 文件。",
+    "difficulty": "medium",
+    "category": "workflow",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0050",
+    "description": "smart_truncate 的首尾保留策略",
+    "query": "smart_truncate 如何分配头尾比例并插入分隔符？",
+    "expected_files": [
+      "evaluation/utils.py"
+    ],
+    "expected_answer": "smart_truncate 默认 keep_ratio=0.7，先扣除分隔符 '\\n\\n... [中间内容已省略] ...\\n\\n' 长度，再按 70% 头部 + 30% 尾部分配剩余额度。",
+    "difficulty": "medium",
+    "category": "code_finding",
+    "language": "zh",
+    "created_at": "2026-03-21T00:00:00"
   }
 ]

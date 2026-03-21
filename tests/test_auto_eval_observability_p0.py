@@ -141,6 +141,9 @@ def test_queue_worker_processes_tasks_in_background(tmp_path, monkeypatch):
     assert metrics["enqueued"] == 3
     assert engine.called == 3
     assert metrics["processed"] >= 3
+    assert metrics["inflight"] == 0
+    assert metrics["terminal_count"] >= metrics["enqueued"]
+    assert metrics["is_idle"] is True
     assert _line_count(router.eval_results_file) == 0  # visualize_only
 
 

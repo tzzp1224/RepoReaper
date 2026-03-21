@@ -146,8 +146,12 @@ done
 
 echo "⏳ Step 4: wait for async sidecar queue to drain"
 for _ in $(seq 1 90); do
-  qsize="$(curl -sS "$API_BASE/auto-eval/metrics" | jq -r '.metrics.queue_size // 0')"
-  if [ "$qsize" = "0" ]; then
+  snapshot="$(curl -sS "$API_BASE/auto-eval/metrics")"
+  qsize="$(printf '%s' "$snapshot" | jq -r '.metrics.queue_size // 0')"
+  inflight="$(printf '%s' "$snapshot" | jq -r '.metrics.inflight // 0')"
+  enq="$(printf '%s' "$snapshot" | jq -r '.metrics.enqueued // 0')"
+  term="$(printf '%s' "$snapshot" | jq -r '(.metrics.processed // 0) + (.metrics.failed // 0)')"
+  if [ "$qsize" = "0" ] && [ "$inflight" = "0" ] && [ "$term" -ge "$enq" ]; then
     break
   fi
   sleep 1
