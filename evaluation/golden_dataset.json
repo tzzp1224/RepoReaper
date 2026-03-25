@@ -677,5 +677,162 @@
     "category": "code_finding",
     "language": "zh",
     "created_at": "2026-03-21T00:00:00"
+  },
+  {
+    "id": "sample_0051",
+    "description": "trace_id 生成与回退逻辑",
+    "query": "start_trace 里 trace_id 是如何生成并回退的？",
+    "expected_files": [
+      "app/services/tracing_service.py"
+    ],
+    "expected_answer": "start_trace 先生成 uuid4；若 langfuse_client 可用且 create_trace_id 调用成功，会用返回值覆盖；异常时保持 uuid4 结果继续执行。",
+    "difficulty": "medium",
+    "category": "workflow",
+    "language": "zh",
+    "created_at": "2026-03-24T00:00:00"
+  },
+  {
+    "id": "sample_0052",
+    "description": "trace URL 的 SDK 兼容回退",
+    "query": "How does get_trace_url build a fallback URL when SDK helper is unavailable?",
+    "expected_files": [
+      "app/services/tracing_service.py"
+    ],
+    "expected_answer": "get_trace_url returns None if client/trace_id is missing; otherwise it tries client get_trace_url and falls back to '{LANGFUSE_HOST}/traces/{trace_id}'.",
+    "difficulty": "easy",
+    "category": "code_finding",
+    "language": "en",
+    "created_at": "2026-03-24T00:00:00"
+  },
+  {
+    "id": "sample_0053",
+    "description": "Qdrant 本地模式共享客户端初始化",
+    "query": "Qdrant local 模式初始化共享客户端时做了哪些事？",
+    "expected_files": [
+      "app/storage/qdrant_store.py"
+    ],
+    "expected_answer": "get_shared_client 在 local 模式会先加载并校验配置，确保 local_path 存在，然后用 AsyncQdrantClient(path=local_path, timeout=...) 创建共享单例。",
+    "difficulty": "medium",
+    "category": "architecture",
+    "language": "zh",
+    "created_at": "2026-03-24T00:00:00"
+  },
+  {
+    "id": "sample_0054",
+    "description": "关闭共享 Qdrant 客户端后的状态变更",
+    "query": "What exactly does close_shared_client do after closing the client?",
+    "expected_files": [
+      "app/storage/qdrant_store.py"
+    ],
+    "expected_answer": "If a shared client exists, close_shared_client awaits close(), sets _shared_client to None, and logs that the shared client has been closed.",
+    "difficulty": "easy",
+    "category": "general",
+    "language": "en",
+    "created_at": "2026-03-24T00:00:00"
+  },
+  {
+    "id": "sample_0055",
+    "description": "锁后端选择与默认值",
+    "query": "RepoLock 默认会选哪种锁后端？按什么逻辑切换？",
+    "expected_files": [
+      "app/utils/repo_lock.py"
+    ],
+    "expected_answer": "_get_backend 读取 LockConfig.backend（默认 file）；backend=redis 时用 RedisLockBackend，backend=file 时用 FileLockBackend，其他值回退 MemoryLockBackend。",
+    "difficulty": "medium",
+    "category": "architecture",
+    "language": "zh",
+    "created_at": "2026-03-24T00:00:00"
+  },
+  {
+    "id": "sample_0056",
+    "description": "文件锁 key 清洗规则",
+    "query": "How is a file lock path sanitized to avoid path injection?",
+    "expected_files": [
+      "app/utils/repo_lock.py"
+    ],
+    "expected_answer": "FileLockBackend._get_lock_path keeps only letters, digits, '_' and '-', replaces other characters with '_', then appends '.lock' under lock_dir.",
+    "difficulty": "easy",
+    "category": "code_finding",
+    "language": "en",
+    "created_at": "2026-03-24T00:00:00"
+  },
+  {
+    "id": "sample_0057",
+    "description": "仓库 session_id 组成规则",
+    "query": "generate_repo_session_id 的组成规则是什么？",
+    "expected_files": [
+      "app/utils/session.py"
+    ],
+    "expected_answer": "session_id 格式为 repo_{8位hash}_{owner}_{repo}；hash 取 normalize_repo_url 的 sha256 前8位，owner 最长10、repo 最长15，且都只保留字母数字。",
+    "difficulty": "easy",
+    "category": "general",
+    "language": "zh",
+    "created_at": "2026-03-24T00:00:00"
+  },
+  {
+    "id": "sample_0058",
+    "description": "对话摘要前置条件",
+    "query": "When does ConversationMemory return a summary-prefixed context?",
+    "expected_files": [
+      "app/utils/session.py"
+    ],
+    "expected_answer": "When total messages exceed max_recent_turns*2 and a summary exists, get_context_messages prepends a system summary message before recent turns.",
+    "difficulty": "medium",
+    "category": "workflow",
+    "language": "en",
+    "created_at": "2026-03-24T00:00:00"
+  },
+  {
+    "id": "sample_0059",
+    "description": "LLM key 缺失时的初始化行为",
+    "query": "LLM API Key 缺失时 llm_client 初始化会怎样？",
+    "expected_files": [
+      "app/utils/llm_client.py",
+      "app/core/config.py"
+    ],
+    "expected_answer": "_initialize_client 会基于 settings.LLM_PROVIDER 读取当前 key；若缺失会打印未找到对应 API_KEY 并返回 None，不抛出异常。",
+    "difficulty": "easy",
+    "category": "architecture",
+    "language": "zh",
+    "created_at": "2026-03-24T00:00:00"
+  },
+  {
+    "id": "sample_0060",
+    "description": "文件过滤的默认大小上限",
+    "query": "What is the default max file size in FileFilter and what happens above it?",
+    "expected_files": [
+      "app/utils/github_client.py"
+    ],
+    "expected_answer": "FileFilter.max_file_size defaults to 500000 bytes, and should_include returns False for files larger than that limit.",
+    "difficulty": "easy",
+    "category": "general",
+    "language": "en",
+    "created_at": "2026-03-24T00:00:00"
+  },
+  {
+    "id": "sample_0061",
+    "description": "应用关闭阶段清理顺序",
+    "query": "FastAPI lifespan 关闭阶段执行了哪些清理步骤？",
+    "expected_files": [
+      "app/main.py"
+    ],
+    "expected_answer": "lifespan 关闭阶段依次执行：close_github_client、store_manager.close_all、auto_eval_service.shutdown（若存在）、tracing_service.shutdown、close_shared_client，最后打印 Cleanup complete。",
+    "difficulty": "hard",
+    "category": "workflow",
+    "language": "zh",
+    "created_at": "2026-03-24T00:00:00"
+  },
+  {
+    "id": "sample_0062",
+    "description": "update.sh 的两种后端重启路径",
+    "query": "In update.sh, how does backend restart behavior differ between systemd and fallback mode?",
+    "expected_files": [
+      "update.sh"
+    ],
+    "expected_answer": "When service 'reaper' is active, update.sh restarts it via systemctl; otherwise it kills gunicorn and starts nohup ./venv/bin/gunicorn -c gunicorn_conf.py app.main:app.",
+    "difficulty": "medium",
+    "category": "workflow",
+    "language": "en",
+    "created_at": "2026-03-24T00:00:00"
   }
 ]

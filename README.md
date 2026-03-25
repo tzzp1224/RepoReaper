@@ -175,11 +175,16 @@ docker compose -f docker-compose.observability.yml up -d --build
 | **Human Review Gate** | ✅ Working | `sample_id`-based approve/reject with persistent queue and idempotent decisions |
 | **Langfuse Observability** | ✅ Working | End-to-end trace + score reporting (`final/custom/ragas/tier`) |
 | **Offline Retrieval Benchmark** | ⚠️ Partial | Script works, but depends on pre-indexed vector store and limited golden labels |
-| **Golden Dataset Quality** | ❌ Incomplete | 26 samples, mostly no `expected_answer`, all English |
+| **Golden Dataset Quality** | ⚠️ Improving | 63 samples, `expected_answer` filled, bilingual (`zh/en`); coverage breadth is being expanded |
 | **Ragas Integration** | ✅ Implemented | Dataset-based API path with sampling/timeout/circuit breaker |
 | **Runtime Contract Cleanup** | ✅ Completed | Runtime path is generation-focused; dead eval imports/DPO runtime placeholders removed, canonical score-tier thresholds centralized, dedupe eviction deterministic, startup no longer preloads golden dataset, Langfuse score path uses deterministic `create_score` fallback and graceful tracing shutdown |
 
 ---
+
+Golden dataset quick check:
+```bash
+python evaluation/golden_dataset_builder.py validate --strict
+```
 
 ## ⚠️ Known Issues
 

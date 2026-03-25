@@ -12,6 +12,7 @@ Author: Dexter
 Date: 2025-01-27
 """
 
+import argparse
 import json
 import os
 from typing import List, Dict, Optional
@@ -251,8 +252,20 @@ def interactive_builder():
 # 自动评估数据集的完整性
 # ============================================================================
 
-def validate_golden_dataset(filepath: str = "evaluation/golden_dataset.json") -> Dict:
-    """验证黄金数据集的完整性"""
+STRICT_MIN_LANGUAGE_COUNT = 5
+STRICT_MIN_DIFFICULTY_COUNT = 5
+
+
+def _normalize_query(query: str) -> str:
+    """规范化 query（大小写/空白），用于更稳健的去重。"""
+    return " ".join((query or "").strip().lower().split())
+
+
+def validate_golden_dataset(
+    filepath: str = "evaluation/golden_dataset.json",
+    strict: bool = False,
+) -> Dict:
+    """验证黄金数据集的完整性。"""
     
     builder = GoldenDatasetBuilder(filepath)
     issues = {
@@ -261,10 +274,15 @@ def validate_golden_dataset(filepath: str = "evaluation/golden_dataset.json") ->
         "empty_files": [],
         "empty_expected_answers": [],
         "duplicates": [],
-        "duplicate_ids": []
+        "duplicate_ids": [],
+        "missing_expected_file_paths": [],
+        "normalized_duplicates": [],
+        "language_distribution": [],
+        "difficulty_distribution": [],
     }
     
     seen_queries = set()
+    seen_normalized_queries = set()
     seen_ids = set()
     
     for i, sample in enumerate(builder.samples):
@@ -283,15 +301,47 @@ def validate_golden_dataset(filepath: str = "evaluation/golden_dataset.json") ->
             issues["duplicates"].append(f"Sample {i}: duplicate query")
         seen_queries.add(sample.query)
 
+        normalized_query = _normalize_query(sample.query)
+        if normalized_query in seen_normalized_queries:
+            issues["normalized_duplicates"].append(
+                f"Sample {i}: normalized duplicate query"
+            )
+        seen_normalized_queries.add(normalized_query)
+
         if sample.id in seen_ids:
             issues["duplicate_ids"].append(f"Sample {i}: duplicate id '{sample.id}'")
         seen_ids.add(sample.id)
+
+        for file_path in sample.expected_files:
+            clean_path = (file_path or "").strip()
+            if clean_path and not os.path.exists(clean_path):
+                issues["missing_expected_file_paths"].append(
+                    f"Sample {i}: expected file not found '{clean_path}'"
+                )
+
+    if strict:
+        stats = builder.get_statistics()
+        language_stats = stats.get("by_language", {})
+        difficulty_stats = stats.get("by_difficulty", {})
+
+        for language in ("zh", "en"):
+            if language_stats.get(language, 0) < STRICT_MIN_LANGUAGE_COUNT:
+                issues["language_distribution"].append(
+                    f"language '{language}' count < {STRICT_MIN_LANGUAGE_COUNT}"
+                )
+
+        for difficulty in ("easy", "medium", "hard"):
+            if difficulty_stats.get(difficulty, 0) < STRICT_MIN_DIFFICULTY_COUNT:
+                issues["difficulty_distribution"].append(
+                    f"difficulty '{difficulty}' count < {STRICT_MIN_DIFFICULTY_COUNT}"
+                )
     
     return {
-        "valid": len(issues) == 0 or not any(issues.values()),
+        "valid": not any(issues.values()),
         "total_samples": len(builder.samples),
         "issues": issues,
-        "stats": builder.get_statistics()
+        "stats": builder.get_statistics(),
+        "strict": strict,
     }
 
 
@@ -393,32 +443,50 @@ def export_to_ragas_format(golden_filepath: str, output_filepath: str = "evaluat
 # ============================================================================
 
 if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) > 1:
-        command = sys.argv[1]
-        
-        if command == "init":
-            init_github_agent_dataset()
-        
-        elif command == "validate":
-            result = validate_golden_dataset()
-            print(json.dumps(result, indent=2, ensure_ascii=False))
-        
-        elif command == "export-ragas":
-            export_to_ragas_format("evaluation/golden_dataset.json")
-        
-        elif command == "interactive":
-            interactive_builder()
-        
-        else:
-            print(f"Unknown command: {command}")
-    
+    parser = argparse.ArgumentParser(description="黄金数据集构建工具")
+    subparsers = parser.add_subparsers(dest="command")
+
+    subparsers.add_parser("init", help="快速初始化")
+
+    validate_parser = subparsers.add_parser("validate", help="验证数据集")
+    validate_parser.add_argument(
+        "--filepath",
+        default="evaluation/golden_dataset.json",
+        help="黄金数据集路径",
+    )
+    validate_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="启用严格分布校验（中英/难度下限）",
+    )
+
+    export_parser = subparsers.add_parser("export-ragas", help="导出为Ragas格式")
+    export_parser.add_argument(
+        "--input",
+        default="evaluation/golden_dataset.json",
+        help="输入黄金数据集路径",
+    )
+    export_parser.add_argument(
+        "--output",
+        default="evaluation/ragas_eval_dataset.json",
+        help="导出文件路径",
+    )
+
+    subparsers.add_parser("interactive", help="交互式构建")
+
+    args = parser.parse_args()
+    command = args.command
+
+    if command == "init":
+        init_github_agent_dataset()
+    elif command == "validate":
+        result = validate_golden_dataset(filepath=args.filepath, strict=args.strict)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        if not result["valid"]:
+            raise SystemExit(1)
+    elif command == "export-ragas":
+        export_to_ragas_format(golden_filepath=args.input, output_filepath=args.output)
+    elif command == "interactive":
+        interactive_builder()
     else:
-        print("黄金数据集构建工具")
-        print()
-        print("用法:")
-        print("  python golden_dataset_builder.py init              # 快速初始化")
-        print("  python golden_dataset_builder.py validate          # 验证数据集")
-        print("  python golden_dataset_builder.py export-ragas      # 导出为Ragas格式")
-        print("  python golden_dataset_builder.py interactive       # 交互式构建")
+        parser.print_help()

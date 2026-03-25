@@ -1,0 +1,25 @@
+name: Golden Dataset Validate
+
+on:
+  pull_request:
+    paths:
+      - "evaluation/golden_dataset.json"
+      - "evaluation/golden_dataset_builder.py"
+      - ".github/workflows/golden_dataset_validate.yml"
+  push:
+    branches: [main]
+    paths:
+      - "evaluation/golden_dataset.json"
+      - "evaluation/golden_dataset_builder.py"
+      - ".github/workflows/golden_dataset_validate.yml"
+
+jobs:
+  validate-golden-dataset:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate Golden Dataset (strict)
+        run: python evaluation/golden_dataset_builder.py validate --strict

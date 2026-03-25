@@ -172,11 +172,16 @@ docker compose -f docker-compose.observability.yml up -d --build
 | **人工审核闸门** | ✅ 可用 | `sample_id` 审核接口 + 待审队列持久化 + 幂等审批 |
 | **Langfuse 可观测** | ✅ 可用 | 全链路 trace + 分数上报（`final/custom/ragas/tier`） |
 | **离线检索评估** | ⚠️ 部分完成 | 脚本可跑，但依赖已索引向量库且黄金集标注不足 |
-| **黄金数据集质量** | ❌ 不完整 | 26 条样本，`expected_answer` 基本为空，且全英文 |
+| **黄金数据集质量** | ⚠️ 持续优化中 | 63 条样本，`expected_answer` 已补齐，支持中英双语；当前正补充覆盖广度 |
 | **Ragas 集成** | ✅ 已实现 | 已升级 Dataset API，保留抽样/超时/熔断机制 |
 | **运行时合同收敛** | ✅ 已完成 | 在线运行路径已聚焦 generation 评估；死评估导入与运行时 DPO 占位已移除，score-tier 阈值统一，去重缓存确定性淘汰，启动不再预加载黄金集，Langfuse score 上报改为确定性 `create_score` 路径并支持优雅 shutdown |
 
 ---
+
+黄金集快速校验：
+```bash
+python evaluation/golden_dataset_builder.py validate --strict
+```
 
 ## ⚠️ 已知问题
 
