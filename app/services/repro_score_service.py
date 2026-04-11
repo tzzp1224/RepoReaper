@@ -288,17 +288,20 @@ async def compute_repro_score(
     effective_repo_url: str = context.get("repo_url") or ""
 
     # 0. GitHub insight（§3.1，与 §4「C 接入 insight」对齐）
-    insight: Dict[str, Any] = {"issue_risks": [], "recent_feats": [], "stats": {}}
+    #    _upstream_error 存在时说明 GitHub 不可达，评分降级：仅用规则+报告，不惩罚维度。
+    insight: Dict[str, Any] = {"issue_risks": [], "recent_feats": [], "stats": {}, "degraded": True}
     if effective_repo_url:
         insight = await fetch_issue_commit_insight(
             effective_repo_url,
             since_days=insight_since_days,
             limit=insight_limit,
         )
+    insight_degraded = bool(insight.get("degraded") or insight.get("_upstream_error"))
 
-    # 1. 规则打分 + insight 校正
+    # 1. 规则打分 + insight 校正（降级时跳过 insight 惩罚）
     dim_raw = _rule_based_scores(file_tree)
-    dim_raw = _adjust_scores_for_insight(dim_raw, insight)
+    if not insight_degraded:
+        dim_raw = _adjust_scores_for_insight(dim_raw, insight)
     overall_raw = _aggregate(dim_raw)
 
     # 2. LLM 生成 risks / summary（含 insight JSON）

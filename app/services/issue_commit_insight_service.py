@@ -128,6 +128,19 @@ def build_insight_payload(
     }
 
 
+def _empty_payload(*, degraded: bool = False, upstream_error: Optional[str] = None) -> Dict[str, Any]:
+    """构造空结构，附带失败语义标记。"""
+    out: Dict[str, Any] = {
+        "issue_risks": [],
+        "recent_feats": [],
+        "stats": dict(_EMPTY_STATS),
+        "degraded": degraded,
+    }
+    if upstream_error is not None:
+        out["_upstream_error"] = upstream_error
+    return out
+
+
 async def fetch_issue_commit_insight(
     repo_url: str,
     since_days: int = 90,
@@ -137,20 +150,22 @@ async def fetch_issue_commit_insight(
     拉取并结构化 Issues + Commits 洞察。
 
     Returns:
-        与 §3.1 `data` 字段同结构的 dict。失败时返回空结构（不抛给上层）。
+        与 §3.1 `data` 字段同结构的 dict。
+        额外字段:
+        - ``degraded`` (bool): True 表示上游部分/完全不可用，数据可能不完整。
+        - ``_upstream_error`` (str, 仅失败时存在): 内部标记，路由层据此返回
+          ``UPSTREAM_UNAVAILABLE`` 错误而非 ``success``；正常路径不包含此字段。
     """
     parsed = parse_repo_url(repo_url)
     if not parsed:
         logger.warning("issue_commit_insight: invalid repo_url")
-        return {"issue_risks": [], "recent_feats": [], "stats": dict(_EMPTY_STATS)}
+        return _empty_payload(upstream_error="invalid repo_url")
 
     since_days = max(1, min(since_days, 365))
     limit = max(1, min(limit, 500))
 
     since_dt = datetime.now(timezone.utc) - timedelta(days=since_days)
     since_str = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    empty = {"issue_risks": [], "recent_feats": [], "stats": dict(_EMPTY_STATS)}
 
     try:
         client = get_github_client()
@@ -162,15 +177,17 @@ async def fetch_issue_commit_insight(
         raw_commits = await client.list_repo_commits(
             repo, since=since_str, per_page=100, max_items=limit
         )
-        return build_insight_payload(
+        result = build_insight_payload(
             raw_issues,
             raw_commits,
             limit_issues=limit,
             limit_commits=limit,
         )
+        result["degraded"] = False
+        return result
     except GitHubError as e:
         logger.warning("issue_commit_insight GitHubError: %s", e)
-        return empty
+        return _empty_payload(upstream_error=f"GitHub API error: {e.message}")
     except Exception as e:
         logger.warning("issue_commit_insight failed: %s", e, exc_info=True)
-        return empty
+        return _empty_payload(upstream_error=f"Unexpected error: {e}")

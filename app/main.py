@@ -208,6 +208,20 @@ def _unified_error(code: str, message: str, status_code: int = 400) -> JSONRespo
     )
 
 
+async def _parse_json_body(request: Request) -> dict:
+    """
+    统一 JSON body 解析兜底：坏 JSON / 非 object body 一律抛 ValueError，
+    由路由层捕获后返回 INVALID_ARGUMENT。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise ValueError("Request body must be valid JSON")
+    if not isinstance(body, dict):
+        raise ValueError("Request body must be a JSON object, not array or scalar")
+    return body
+
+
 def _parse_insight_query_params(data: dict) -> tuple[int, int]:
     """与 §3.1 一致：since_days、limit 可选，非法则回退默认。"""
     since_days = data.get("since_days", 90)
@@ -224,15 +238,21 @@ async def repo_insight_issues_commits(request: Request):
     """§3.1 Issues + Commits 洞察（成员 B 数据形态；实现供 C 评分融合与前端展示）"""
     from app.services.issue_commit_insight_service import fetch_issue_commit_insight
 
-    data = await request.json()
+    try:
+        data = await _parse_json_body(request)
+    except ValueError as e:
+        return _unified_error("INVALID_ARGUMENT", str(e))
+
     repo_url = (data.get("repo_url") or data.get("url") or "").strip()
     if not repo_url:
         return _unified_error("INVALID_ARGUMENT", "repo_url is required")
 
     since_days, limit = _parse_insight_query_params(data)
 
-    payload = await fetch_issue_commit_insight(repo_url, since_days=since_days, limit=limit)
-    return _unified_success(payload)
+    result = await fetch_issue_commit_insight(repo_url, since_days=since_days, limit=limit)
+    if result.get("_upstream_error"):
+        return _unified_error("UPSTREAM_UNAVAILABLE", result["_upstream_error"], status_code=502)
+    return _unified_success({k: v for k, v in result.items() if not k.startswith("_")})
 
 
 @app.post("/api/repro/score")
@@ -240,7 +260,11 @@ async def repro_score(request: Request):
     """§3.2 可复现性评分"""
     from app.services.repro_score_service import compute_repro_score
 
-    data = await request.json()
+    try:
+        data = await _parse_json_body(request)
+    except ValueError as e:
+        return _unified_error("INVALID_ARGUMENT", str(e))
+
     session_id = data.get("session_id")
     repo_url = data.get("repo_url") or data.get("url")
 
@@ -269,7 +293,11 @@ async def paper_align(request: Request):
     """§3.3 论文-代码对齐"""
     from app.services.paper_align_service import compute_paper_alignment
 
-    data = await request.json()
+    try:
+        data = await _parse_json_body(request)
+    except ValueError as e:
+        return _unified_error("INVALID_ARGUMENT", str(e))
+
     paper_text = data.get("paper_text", "")
     session_id = data.get("session_id")
     repo_url = data.get("repo_url") or data.get("url")

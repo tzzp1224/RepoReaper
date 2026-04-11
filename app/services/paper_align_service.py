@@ -151,7 +151,10 @@ async def _judge_claim(
         raw = re.sub(r"\s*```$", "", raw)
         data = json.loads(raw)
 
-        status = data.get("status", "missing")
+        _VALID_STATUSES = {"aligned", "partial", "missing"}
+        raw_status = data.get("status", "missing")
+        status = raw_status if raw_status in _VALID_STATUSES else "missing"
+
         if status == "missing":
             return MissingClaim(
                 claim=claim,

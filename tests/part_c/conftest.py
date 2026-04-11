@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-测试全局 conftest
+Part C 专属 conftest —— 仅在 tests/part_c/ 作用域内生效。
 
 在任何 app.* 模块被 import 之前，先设置环境变量并 stub 掉重型第三方依赖，
-使测试不需要 qdrant_client、openai、sse_starlette 等即可离线运行。
+使 Part C 测试不需要 qdrant_client、openai、sse_starlette 等即可离线运行。
+不影响仓库中其他测试。
 """
 
 import os

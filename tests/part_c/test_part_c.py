@@ -6,7 +6,7 @@ Part C 单元测试 —— 可复现评分 & 论文-代码对齐
 不需要网络、数据库或 API Key 即可运行。
 
 运行方式:
-    pytest tests/test_part_c.py -v
+    pytest tests/part_c/test_part_c.py -v
 """
 
 from __future__ import annotations
@@ -161,7 +161,7 @@ LLM_JUDGE_MISSING = json.dumps({
 
 # 按调用顺序排列：score 用 1 次 LLM，align 用 1(拆claim) + 3(judge) 次
 async def _empty_issue_commit_insight(*args, **kwargs):
-    """避免单测打真实 GitHub API。"""
+    """避免单测打真实 GitHub API。返回 degraded=False 的空结构。"""
     return {
         "issue_risks": [],
         "recent_feats": [],
@@ -171,6 +171,7 @@ async def _empty_issue_commit_insight(*args, **kwargs):
             "risk_issue_count": 0,
             "recent_feat_count": 0,
         },
+        "degraded": False,
     }
 
 
@@ -474,6 +475,7 @@ class TestComputeReproScore:
                     "risk_issue_count": 0,
                     "recent_feat_count": 0,
                 },
+                "degraded": False,
             }
 
         monkeypatch.setattr(mod, "fetch_issue_commit_insight", capture_fetch)
