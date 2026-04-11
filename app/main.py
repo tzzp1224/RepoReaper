@@ -18,6 +18,7 @@ import uvicorn
 from app.core.config import settings, auto_eval_config as runtime_auto_eval_config
 from app.services.agent_service import agent_stream
 from app.services.chat_service import process_chat_stream, get_eval_data, clear_eval_data
+from app.services.insights_service import issue_summary_stream, commit_roadmap_stream
 from app.services.vector_service import store_manager
 from app.services.auto_evaluation_service import (
     init_auto_evaluation_service,
@@ -204,6 +205,33 @@ async def analyze(url: str, session_id: str, language: str = "en", regenerate_on
     if not session_id:
         return {"error": "Missing session_id"}
     return EventSourceResponse(agent_stream(url, session_id, language, regenerate_only))
+
+
+# === Insights 端点: Issue 摘要 & Commit Roadmap ===
+
+@app.get("/api/insights/issues")
+async def insights_issues(url: str, session_id: str, language: str = "en"):
+    """
+    Issue 摘要端点 (SSE)
+
+    抓取目标仓库 Issues，LLM 生成结构化笔记总结。
+    """
+    if not url:
+        return {"error": "Missing url"}
+    return EventSourceResponse(issue_summary_stream(url, session_id, language))
+
+
+@app.get("/api/insights/commits")
+async def insights_commits(url: str, session_id: str, language: str = "en"):
+    """
+    Commit Roadmap 端点 (SSE)
+
+    遍历目标仓库最近 Commits，LLM 生成 Mermaid Timeline 及叙述。
+    """
+    if not url:
+        return {"error": "Missing url"}
+    return EventSourceResponse(commit_roadmap_stream(url, session_id, language))
+
 
 @app.post("/chat")
 async def chat(request: Request):

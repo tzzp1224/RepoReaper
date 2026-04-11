@@ -62,6 +62,33 @@ class GitHubRepo:
 
 
 @dataclass
+class GitHubIssue:
+    """GitHub Issue 信息"""
+    number: int
+    title: str
+    state: str  # "open" | "closed"
+    labels: List[str]
+    created_at: str
+    updated_at: str
+    body: str = ""
+    comments_count: int = 0
+    user: str = ""
+    is_pull_request: bool = False
+
+
+@dataclass
+class GitHubCommit:
+    """GitHub Commit 信息"""
+    sha: str
+    message: str
+    author: str
+    date: str
+    additions: int = 0
+    deletions: int = 0
+    files_changed: int = 0
+
+
+@dataclass
 class FileFilter:
     """文件过滤配置"""
     ignored_extensions: Set[str] = field(default_factory=lambda: {
@@ -318,6 +345,131 @@ class GitHubClient:
         logger.info(f"📂 仓库 {repo.full_name}: 共 {len(data.get('tree', []))} 项, 过滤后 {len(files)} 文件")
         return files
     
+    # --------------------------------------------------------
+    # Issues API
+    # --------------------------------------------------------
+
+    async def get_repo_issues(
+        self,
+        repo: GitHubRepo,
+        state: str = "all",
+        per_page: int = 30,
+        max_pages: int = 3,
+    ) -> List[GitHubIssue]:
+        """
+        获取仓库 Issues (自动分页, 排除 Pull Request)
+
+        Args:
+            repo: 仓库信息
+            state: "open" | "closed" | "all"
+            per_page: 每页数量
+            max_pages: 最大页数
+
+        Returns:
+            GitHubIssue 列表
+        """
+        issues: List[GitHubIssue] = []
+
+        for page in range(1, max_pages + 1):
+            data = await self._request(
+                "GET",
+                f"/repos/{repo.owner}/{repo.name}/issues",
+                params={
+                    "state": state,
+                    "per_page": per_page,
+                    "page": page,
+                    "sort": "updated",
+                    "direction": "desc",
+                },
+            )
+
+            if not data:
+                break
+
+            for item in data:
+                if item.get("pull_request"):
+                    continue
+                body_raw = item.get("body") or ""
+                issues.append(
+                    GitHubIssue(
+                        number=item["number"],
+                        title=item["title"],
+                        state=item["state"],
+                        labels=[lb["name"] for lb in item.get("labels", [])],
+                        created_at=item.get("created_at", ""),
+                        updated_at=item.get("updated_at", ""),
+                        body=body_raw[:500],
+                        comments_count=item.get("comments", 0),
+                        user=item.get("user", {}).get("login", ""),
+                        is_pull_request=False,
+                    )
+                )
+
+            if len(data) < per_page:
+                break
+
+        logger.info(
+            f"📋 仓库 {repo.full_name}: 获取到 {len(issues)} 个 Issues"
+        )
+        return issues
+
+    # --------------------------------------------------------
+    # Commits API
+    # --------------------------------------------------------
+
+    async def get_repo_commits(
+        self,
+        repo: GitHubRepo,
+        per_page: int = 30,
+        max_pages: int = 3,
+    ) -> List[GitHubCommit]:
+        """
+        获取仓库最近 Commits (自动分页)
+
+        Args:
+            repo: 仓库信息
+            per_page: 每页数量
+            max_pages: 最大页数
+
+        Returns:
+            GitHubCommit 列表 (按时间倒序)
+        """
+        commits: List[GitHubCommit] = []
+
+        for page in range(1, max_pages + 1):
+            data = await self._request(
+                "GET",
+                f"/repos/{repo.owner}/{repo.name}/commits",
+                params={
+                    "per_page": per_page,
+                    "page": page,
+                    "sha": repo.default_branch,
+                },
+            )
+
+            if not data:
+                break
+
+            for item in data:
+                commit_data = item.get("commit", {})
+                author_info = commit_data.get("author", {})
+                commits.append(
+                    GitHubCommit(
+                        sha=item.get("sha", "")[:7],
+                        message=commit_data.get("message", ""),
+                        author=author_info.get("name", "unknown"),
+                        date=author_info.get("date", ""),
+                    )
+                )
+
+            if len(data) < per_page:
+                break
+
+        logger.info(
+            f"📝 仓库 {repo.full_name}: 获取到 {len(commits)} 个 Commits"
+        )
+        return commits
+
     # --------------------------------------------------------
     # 文件内容 API
     # --------------------------------------------------------
