@@ -44,6 +44,13 @@ export const useAppStore = defineStore('app', () => {
   // === 检查结果缓存 ===
   const lastCheckResult = ref(null)
   
+  // === Insights: Issue 摘要 & Commit Roadmap ===
+  const activeInsightTab = ref('report')  // 'report' | 'issues' | 'roadmap'
+  const issueNotes = ref('')
+  const roadmapContent = ref('')
+  const isIssueStreaming = ref(false)
+  const isRoadmapStreaming = ref(false)
+  
   // === 计算属性 ===
   const langLabel = computed(() => language.value === 'zh' ? '中文' : 'EN')
   const shortSessionId = computed(() => 
@@ -186,6 +193,13 @@ export const useAppStore = defineStore('app', () => {
     chatEnabled,
     isChatGenerating,
     lastCheckResult,
+    
+    // Insights
+    activeInsightTab,
+    issueNotes,
+    roadmapContent,
+    isIssueStreaming,
+    isRoadmapStreaming,
     
     // Computed
     langLabel,

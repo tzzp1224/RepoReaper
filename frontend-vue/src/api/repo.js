@@ -35,6 +35,22 @@ export function createAnalysisStream(url, sessionId, language, regenerateOnly) {
 }
 
 /**
+ * 创建 Issue 摘要 SSE 连接
+ */
+export function createIssueStream(url, sessionId, language) {
+  const params = new URLSearchParams({ url, session_id: sessionId, language })
+  return new EventSource(`${API_BASE}/api/insights/issues?${params}`)
+}
+
+/**
+ * 创建 Commit Roadmap SSE 连接
+ */
+export function createRoadmapStream(url, sessionId, language) {
+  const params = new URLSearchParams({ url, session_id: sessionId, language })
+  return new EventSource(`${API_BASE}/api/insights/commits?${params}`)
+}
+
+/**
  * 发送聊天消息（流式）
  */
 export async function sendChatMessage(query, sessionId, repoUrl, signal) {

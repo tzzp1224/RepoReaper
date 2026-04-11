@@ -15,6 +15,8 @@ from app.utils.github_client import (
     GitHubClient,
     GitHubRepo,
     GitHubFile,
+    GitHubIssue,
+    GitHubCommit,
     FileFilter,
     GitHubError,
     GitHubNotFoundError,
@@ -142,6 +144,42 @@ class GitHubService:
         """
         return await self._get_repo_from_url(repo_url)
 
+    async def get_repo_issues(
+        self,
+        repo_url: str,
+        state: str = "all",
+        per_page: int = 30,
+        max_pages: int = 3,
+    ) -> List[GitHubIssue]:
+        """
+        获取仓库 Issues
+        
+        Args:
+            repo_url: GitHub 仓库 URL
+            state: "open" | "closed" | "all"
+            per_page: 每页数量
+            max_pages: 最大页数
+        """
+        repo = await self._get_repo_from_url(repo_url)
+        return await self.client.get_repo_issues(repo, state, per_page, max_pages)
+
+    async def get_repo_commits(
+        self,
+        repo_url: str,
+        per_page: int = 30,
+        max_pages: int = 3,
+    ) -> List[GitHubCommit]:
+        """
+        获取仓库最近 Commits
+        
+        Args:
+            repo_url: GitHub 仓库 URL
+            per_page: 每页数量
+            max_pages: 最大页数
+        """
+        repo = await self._get_repo_from_url(repo_url)
+        return await self.client.get_repo_commits(repo, per_page, max_pages)
+
 
 # ============================================================
 # 全局服务实例
@@ -196,15 +234,40 @@ async def get_file_content(repo_url: str, file_path: str) -> Optional[str]:
     return await service.get_file_content(repo_url, file_path)
 
 
+async def get_repo_issues(
+    repo_url: str,
+    state: str = "all",
+    per_page: int = 30,
+    max_pages: int = 3,
+) -> List[GitHubIssue]:
+    """获取仓库 Issues"""
+    service = get_github_service()
+    return await service.get_repo_issues(repo_url, state, per_page, max_pages)
+
+
+async def get_repo_commits(
+    repo_url: str,
+    per_page: int = 30,
+    max_pages: int = 3,
+) -> List[GitHubCommit]:
+    """获取仓库最近 Commits"""
+    service = get_github_service()
+    return await service.get_repo_commits(repo_url, per_page, max_pages)
+
+
 # 导出
 __all__ = [
     "GitHubService",
     "get_github_service",
     "get_repo_structure",
     "get_file_content",
+    "get_repo_issues",
+    "get_repo_commits",
     "parse_repo_url_compat",
     "GitHubError",
     "GitHubNotFoundError",
     "FileFilter",
     "GitHubRepo",
+    "GitHubIssue",
+    "GitHubCommit",
 ]

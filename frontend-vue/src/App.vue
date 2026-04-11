@@ -5,7 +5,7 @@
     
     <!-- 主内容区 -->
     <div class="main-container" ref="mainRef">
-      <!-- 左侧面板：输入 + 日志 + 报告 -->
+      <!-- 左侧面板：输入 + 日志 + 报告/Insights -->
       <div class="left-panel" :style="{ width: leftPanelWidth + '%' }">
         <div class="input-section">
           <UrlInput />
@@ -14,7 +14,36 @@
         
         <div class="panel-content">
           <LogsArea />
-          <ReportPanel @open-modal="openModal" />
+
+          <!-- Tab 栏 -->
+          <div class="insight-tabs">
+            <button
+              class="tab-btn"
+              :class="{ active: store.activeInsightTab === 'report' }"
+              @click="store.activeInsightTab = 'report'"
+            >
+              📊 Report
+            </button>
+            <button
+              class="tab-btn"
+              :class="{ active: store.activeInsightTab === 'issues' }"
+              @click="store.activeInsightTab = 'issues'"
+            >
+              📋 Issues Notebook
+            </button>
+            <button
+              class="tab-btn"
+              :class="{ active: store.activeInsightTab === 'roadmap' }"
+              @click="store.activeInsightTab = 'roadmap'"
+            >
+              🗺️ Commit Roadmap
+            </button>
+          </div>
+
+          <!-- Tab 内容 -->
+          <ReportPanel v-show="store.activeInsightTab === 'report'" @open-modal="openModal" />
+          <IssuePanel v-show="store.activeInsightTab === 'issues'" />
+          <RoadmapPanel v-show="store.activeInsightTab === 'roadmap'" />
         </div>
       </div>
       
@@ -43,9 +72,14 @@ import UrlInput from './components/UrlInput.vue'
 import LogsArea from './components/LogsArea.vue'
 import SmartHint from './components/SmartHint.vue'
 import ReportPanel from './components/ReportPanel.vue'
+import IssuePanel from './components/IssuePanel.vue'
+import RoadmapPanel from './components/RoadmapPanel.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import PanelResizer from './components/PanelResizer.vue'
 import ImageModal from './components/ImageModal.vue'
+import { useAppStore } from './stores/app'
+
+const store = useAppStore()
 
 // 面板宽度
 const leftPanelWidth = ref(50)
@@ -114,6 +148,37 @@ function closeModal() {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  min-height: 0; /* 关键：允许 flex 子项收缩 */
+  min-height: 0;
+}
+
+.insight-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 0 10px;
+  flex-shrink: 0;
+}
+
+.tab-btn {
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+  background: #f1f5f9;
+}
+
+.tab-btn.active {
+  color: var(--primary-color);
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  font-weight: 600;
 }
 </style>
