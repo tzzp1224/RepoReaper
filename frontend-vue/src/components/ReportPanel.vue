@@ -22,10 +22,16 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { marked } from 'marked'
 import mermaid from 'mermaid'
 import { useAppStore } from '../stores/app'
+import {
+  initializeMermaid,
+  sanitizeMermaidCode,
+  createMermaidErrorHtml,
+  bindMermaidZoom
+} from '../composables/useMermaidShared'
 
 const store = useAppStore()
 const reportRef = ref(null)
@@ -39,32 +45,10 @@ const RENDER_THROTTLE_MS = 400  // 节流间隔（最少间隔多久渲染一次
 
 // 存储已渲染的代码块 - key 是代码内容，value 是 { html: string, isError: boolean }
 const renderedMermaidCache = new Map()
-// 错误 HTML 生成函数
-function createErrorHtml(originalCode) {
-  return `
-    <div class="mermaid-error-header">⚠️ 图表渲染失败</div>
-    <details>
-      <summary>查看原始 Mermaid 代码</summary>
-      <pre class="mermaid-source"><code>${escapeHtml(originalCode)}</code></pre>
-    </details>
-    <div class="mermaid-error-tip">提示: 请检查代码语法，中文文本需用双引号包裹</div>
-  `
-}
 
 // 初始化 Mermaid
 onMounted(() => {
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: 'neutral',
-    securityLevel: 'loose',
-    flowchart: {
-      htmlLabels: true,
-      useMaxWidth: true
-    },
-    sequence: {
-      useMaxWidth: true
-    }
-  })
+  initializeMermaid()
 })
 
 // 清理定时器
@@ -74,67 +58,6 @@ onUnmounted(() => {
     mermaidRenderTimeout = null
   }
 })
-
-/**
- * 预处理 Mermaid 代码，自动修复中文渲染问题
- * - 为未加引号的中文节点添加引号
- * - 处理特殊字符
- */
-function sanitizeMermaidCode(code) {
-  let lines = code.split('\n')
-  
-  return lines.map(line => {
-    // 跳过注释和空行
-    if (line.trim().startsWith('%%') || line.trim() === '') {
-      return line
-    }
-    
-    // 处理 graph/flowchart 节点定义: A[文本] -> A["文本"]
-    // 匹配 节点ID[文本] 或 节点ID(文本) 或 节点ID{文本} 等形式
-    line = line.replace(/(\w+)\[([^\]"]+)\]/g, (match, id, text) => {
-      // 如果文本包含中文或特殊字符且未被引号包裹
-      if (/[\u4e00-\u9fa5]/.test(text) || /[()（）：:,，]/.test(text)) {
-        return `${id}["${text}"]`
-      }
-      return match
-    })
-    
-    // 处理圆角节点 A(文本)
-    line = line.replace(/(\w+)\(([^)"]+)\)/g, (match, id, text) => {
-      if (/[\u4e00-\u9fa5]/.test(text) || /[[\]{}：:,，]/.test(text)) {
-        return `${id}("${text}")`
-      }
-      return match
-    })
-    
-    // 处理菱形节点 A{文本}
-    line = line.replace(/(\w+)\{([^}"]+)\}/g, (match, id, text) => {
-      if (/[\u4e00-\u9fa5]/.test(text) || /[[\]()：:,，]/.test(text)) {
-        return `${id}{"${text}"}`
-      }
-      return match
-    })
-    
-    // 处理连线标签 -->|文本| 或 --|文本|-->
-    line = line.replace(/(\|)([^|"]+)(\|)/g, (match, p1, text, p2) => {
-      if (/[\u4e00-\u9fa5]/.test(text)) {
-        return `|"${text}"|`
-      }
-      return match
-    })
-    
-    // 处理 sequenceDiagram 中的消息文本
-    // User->>API: 发起请求 -> User->>API: "发起请求"
-    line = line.replace(/(->|-->>?|<<--)([^:]+):\s*([^"'\n]+)$/g, (match, arrow, target, msg) => {
-      if (/[\u4e00-\u9fa5]/.test(msg) && !msg.startsWith('"')) {
-        return `${arrow}${target}: "${msg.trim()}"`
-      }
-      return match
-    })
-    
-    return line
-  }).join('\n')
-}
 
 /**
  * 获取 markdown 中所有完整的 mermaid 代码块内容集合
@@ -179,13 +102,8 @@ function restoreCachedMermaids(container) {
         // 恢复成功渲染的图表
         div.className = 'mermaid'
         div.innerHTML = cached.html
-        div.style.cursor = 'zoom-in'
-        div.style.overflowX = 'auto'
         div.dataset.originalCode = content
-        
-        div.onclick = () => {
-          emit('openModal', div.innerHTML)
-        }
+        bindMermaidZoom(div, (contentHtml) => emit('openModal', contentHtml))
       }
       
       const pre = code.parentElement
@@ -395,16 +313,9 @@ async function renderSingleCodeBlock(codeBlock, isFinalRender = false) {
     
     const svg = div.querySelector('svg')
     if (svg) {
-      div.style.cursor = 'zoom-in'
-      div.style.overflowX = 'auto'
-      svg.style.maxWidth = '100%'
-      
       // 缓存成功渲染结果
       renderedMermaidCache.set(originalCode, { html: div.innerHTML, isError: false })
-      
-      div.onclick = () => {
-        emit('openModal', div.innerHTML)
-      }
+      bindMermaidZoom(div, (contentHtml) => emit('openModal', contentHtml))
     }
     // 注意：如果 mermaid.run 成功但没有 SVG，不做任何处理
     // 让下一次渲染周期再尝试（因为没有加入缓存）
@@ -413,7 +324,7 @@ async function renderSingleCodeBlock(codeBlock, isFinalRender = false) {
     
     if (isFinalRender) {
       // 最终渲染失败，缓存错误状态
-      const errorHtml = createErrorHtml(originalCode)
+      const errorHtml = createMermaidErrorHtml(originalCode)
       renderedMermaidCache.set(originalCode, { html: errorHtml, isError: true })
       div.className = 'mermaid-error'
       div.innerHTML = errorHtml
@@ -427,13 +338,6 @@ async function renderSingleCodeBlock(codeBlock, isFinalRender = false) {
       div.replaceWith(newPre)
     }
   }
-}
-
-// HTML 转义函数
-function escapeHtml(text) {
-  const div = document.createElement('div')
-  div.textContent = text
-  return div.innerHTML
 }
 
 const emit = defineEmits(['openModal'])

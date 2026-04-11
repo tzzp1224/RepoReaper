@@ -17,11 +17,17 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick, onMounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { marked } from 'marked'
 import mermaid from 'mermaid'
 import { useAppStore } from '../stores/app'
 import { useInsights } from '../composables/useInsights'
+import {
+  initializeMermaid,
+  sanitizeMermaidCode,
+  createMermaidErrorHtml,
+  bindMermaidZoom
+} from '../composables/useMermaidShared'
 
 const store = useAppStore()
 const { fetchRoadmap } = useInsights()
@@ -29,81 +35,228 @@ const contentRef = ref(null)
 const htmlRef = ref(null)
 const emit = defineEmits(['openModal'])
 
-let renderTimeout = null
-let mermaidRendered = false
+const RENDER_THROTTLE_MS = 400
+let mermaidRenderTimeout = null
+const isRendering = ref(false)
+let lastRenderTime = 0
+const renderedMermaidCache = new Map()
 
 onMounted(() => {
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: 'neutral',
-    securityLevel: 'loose'
-  })
+  initializeMermaid()
 })
 
-async function renderMermaidBlocks() {
-  if (!htmlRef.value) return
+onUnmounted(() => {
+  clearMermaidRenderTimeout()
+})
 
-  const codeBlocks = htmlRef.value.querySelectorAll('code.language-mermaid')
-  if (codeBlocks.length === 0) return
+function clearMermaidRenderTimeout() {
+  if (mermaidRenderTimeout) {
+    clearTimeout(mermaidRenderTimeout)
+    mermaidRenderTimeout = null
+  }
+}
 
-  for (const codeBlock of codeBlocks) {
-    const pre = codeBlock.parentElement
-    if (!pre || pre.tagName !== 'PRE') continue
+function getCompleteMermaidCodes(markdown) {
+  if (!markdown) return new Set()
 
-    const code = codeBlock.textContent.trim()
+  const codes = new Set()
+  const mermaidBlockRegex = /```mermaid\s*\n([\s\S]*?)```/g
+  let match
+
+  while ((match = mermaidBlockRegex.exec(markdown)) !== null) {
+    const code = match[1].trim()
+    if (code.length > 0) {
+      codes.add(code)
+    }
+  }
+
+  return codes
+}
+
+function restoreCachedMermaids(container) {
+  if (!container) return
+
+  const codeBlocks = container.querySelectorAll('code.language-mermaid')
+  for (const code of codeBlocks) {
+    const content = code.textContent.trim()
+    if (!renderedMermaidCache.has(content)) continue
+
+    const cached = renderedMermaidCache.get(content)
     const div = document.createElement('div')
-    div.id = `mermaid-rm-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`
-    div.className = 'mermaid'
-    div.textContent = code
-    pre.replaceWith(div)
 
-    try {
-      await mermaid.run({ nodes: [div] })
-      const svg = div.querySelector('svg')
-      if (svg) {
-        div.style.cursor = 'zoom-in'
-        div.style.overflowX = 'auto'
-        svg.style.maxWidth = '100%'
-        div.onclick = () => {
-          emit('openModal', div.innerHTML)
-        }
-      }
-      mermaidRendered = true
-    } catch (e) {
-      console.error('[Mermaid/Roadmap] Render failed:', e)
-      div.innerHTML = `<pre style="color:#dc2626;white-space:pre-wrap;">Mermaid render error:\n${code}</pre>`
+    if (cached.isError) {
+      div.className = 'mermaid-error'
+      div.innerHTML = cached.html
+    } else {
+      div.className = 'mermaid'
+      div.innerHTML = cached.html
+      div.dataset.originalCode = content
+      bindMermaidZoom(div, (contentHtml) => emit('openModal', contentHtml))
+    }
+
+    const pre = code.parentElement
+    if (pre && pre.tagName === 'PRE') {
+      pre.replaceWith(div)
     }
   }
 }
 
 function updateHtml(markdown) {
-  if (!htmlRef.value || !markdown) return
-  htmlRef.value.innerHTML = marked.parse(markdown)
+  if (!htmlRef.value) return
+  htmlRef.value.innerHTML = marked.parse(markdown || '')
+  restoreCachedMermaids(htmlRef.value)
 }
 
-watch(() => store.roadmapContent, async (val) => {
-  if (!val) {
-    mermaidRendered = false
+watch(() => store.roadmapContent, async (newVal, oldVal) => {
+  if (!newVal) {
+    clearMermaidRenderTimeout()
+    if (htmlRef.value) {
+      htmlRef.value.innerHTML = ''
+    }
+    renderedMermaidCache.clear()
+    lastRenderTime = 0
     return
   }
+
+  if (!oldVal) {
+    renderedMermaidCache.clear()
+    lastRenderTime = 0
+  }
+
   await nextTick()
-  updateHtml(val)
+  updateHtml(newVal)
+
+  if (!newVal.includes('```mermaid')) return
+
+  const now = Date.now()
+  const timeSinceLastRender = now - lastRenderTime
+
+  if (timeSinceLastRender >= RENDER_THROTTLE_MS) {
+    lastRenderTime = now
+    await renderAllCompleteMermaidBlocks(false)
+  } else if (!mermaidRenderTimeout) {
+    const remainingTime = RENDER_THROTTLE_MS - timeSinceLastRender
+    mermaidRenderTimeout = setTimeout(async () => {
+      mermaidRenderTimeout = null
+      lastRenderTime = Date.now()
+      await renderAllCompleteMermaidBlocks(false)
+    }, remainingTime)
+  }
 })
 
 watch(() => store.isRoadmapStreaming, async (streaming, was) => {
   if (was && !streaming && store.roadmapContent) {
-    mermaidRendered = false
+    clearMermaidRenderTimeout()
     await nextTick()
     updateHtml(store.roadmapContent)
-    setTimeout(() => renderMermaidBlocks(), 300)
+    setTimeout(async () => {
+      await renderAllCompleteMermaidBlocks(true)
+    }, 150)
   }
 })
 
 watch(() => store.activeInsightTab, async (tab) => {
-  if (tab === 'roadmap' && store.roadmapContent && !store.isRoadmapStreaming && !mermaidRendered) {
+  if (tab === 'roadmap' && store.roadmapContent && !store.isRoadmapStreaming) {
     await nextTick()
     updateHtml(store.roadmapContent)
-    setTimeout(() => renderMermaidBlocks(), 100)
+    setTimeout(async () => {
+      await renderAllCompleteMermaidBlocks(true)
+    }, 100)
+  }
+})
+
+async function renderAllCompleteMermaidBlocks(isFinalRender = false) {
+  if (!htmlRef.value) return
+
+  if (isRendering.value) {
+    clearMermaidRenderTimeout()
+    mermaidRenderTimeout = setTimeout(() => renderAllCompleteMermaidBlocks(isFinalRender), 200)
+    return
+  }
+
+  const markdown = store.roadmapContent
+  if (!markdown) return
+
+  const completeCodes = getCompleteMermaidCodes(markdown)
+  if (completeCodes.size === 0) return
+
+  const codeBlocks = htmlRef.value.querySelectorAll('code.language-mermaid')
+  if (codeBlocks.length === 0) return
+
+  const blocksToRender = []
+  for (const codeBlock of codeBlocks) {
+    const code = codeBlock.textContent.trim()
+    if (completeCodes.has(code) && !renderedMermaidCache.has(code)) {
+      blocksToRender.push(codeBlock)
+    }
+  }
+
+  if (blocksToRender.length === 0) return
+
+  isRendering.value = true
+
+  try {
+    for (const codeBlock of blocksToRender) {
+      if (!codeBlock.parentElement) continue
+
+      await new Promise(resolve => {
+        if (window.requestIdleCallback) {
+          requestIdleCallback(resolve, { timeout: 50 })
+        } else {
+          setTimeout(resolve, 10)
+        }
+      })
+
+      if (!store.roadmapContent || !htmlRef.value) {
+        break
+      }
+
+      await renderSingleCodeBlock(codeBlock, isFinalRender)
+    }
+  } catch (e) {
+    console.error('[Mermaid/Roadmap] Render failed:', e)
+  } finally {
+    isRendering.value = false
+  }
+}
+
+async function renderSingleCodeBlock(codeBlock, isFinalRender = false) {
+  const originalCode = codeBlock.textContent.trim()
+  const pre = codeBlock.parentElement
+
+  if (!pre || pre.tagName !== 'PRE') return
+  if (renderedMermaidCache.has(originalCode)) return
+
+  const code = sanitizeMermaidCode(originalCode)
+  const div = document.createElement('div')
+  div.id = `mermaid-rm-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`
+  div.className = 'mermaid'
+  div.dataset.originalCode = originalCode
+  div.textContent = code
+  pre.replaceWith(div)
+
+  try {
+    await mermaid.run({ nodes: [div] })
+
+    const svg = div.querySelector('svg')
+    if (svg) {
+      renderedMermaidCache.set(originalCode, { html: div.innerHTML, isError: false })
+      bindMermaidZoom(div, (contentHtml) => emit('openModal', contentHtml))
+    }
+  } catch (e) {
+    if (isFinalRender) {
+      const errorHtml = createMermaidErrorHtml(originalCode)
+      renderedMermaidCache.set(originalCode, { html: errorHtml, isError: true })
+      div.className = 'mermaid-error'
+      div.innerHTML = errorHtml
+    } else {
+      const newPre = document.createElement('pre')
+      const newCode = document.createElement('code')
+      newCode.className = 'language-mermaid'
+      newCode.textContent = originalCode
+      newPre.appendChild(newCode)
+      div.replaceWith(newPre)
+    }
   }
 })
 </script>
@@ -142,6 +295,47 @@ watch(() => store.activeInsightTab, async (tab) => {
 .markdown-body :deep(.mermaid:hover) {
   background: #f8fafc;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.markdown-body :deep(.mermaid-error) {
+  margin: 20px 0;
+  padding: 16px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+}
+
+.markdown-body :deep(.mermaid-error-header) {
+  color: #dc2626;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.markdown-body :deep(.mermaid-error details) {
+  margin: 8px 0;
+}
+
+.markdown-body :deep(.mermaid-error summary) {
+  cursor: pointer;
+  color: #4b5563;
+  font-size: 14px;
+}
+
+.markdown-body :deep(.mermaid-source) {
+  background: #1f2937;
+  color: #e5e7eb;
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.markdown-body :deep(.mermaid-error-tip) {
+  color: #6b7280;
+  font-size: 13px;
+  margin-top: 8px;
+  font-style: italic;
 }
 
 .placeholder {
