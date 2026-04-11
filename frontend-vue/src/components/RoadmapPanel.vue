@@ -27,6 +27,7 @@ const store = useAppStore()
 const { fetchRoadmap } = useInsights()
 const contentRef = ref(null)
 const htmlRef = ref(null)
+const emit = defineEmits(['openModal'])
 
 let renderTimeout = null
 let mermaidRendered = false
@@ -60,8 +61,12 @@ async function renderMermaidBlocks() {
       await mermaid.run({ nodes: [div] })
       const svg = div.querySelector('svg')
       if (svg) {
+        div.style.cursor = 'zoom-in'
         div.style.overflowX = 'auto'
         svg.style.maxWidth = '100%'
+        div.onclick = () => {
+          emit('openModal', div.innerHTML)
+        }
       }
       mermaidRendered = true
     } catch (e) {
@@ -130,6 +135,13 @@ watch(() => store.activeInsightTab, async (tab) => {
   padding: 10px;
   border-radius: 8px;
   overflow-x: auto;
+  cursor: zoom-in;
+  transition: all 0.2s;
+}
+
+.markdown-body :deep(.mermaid:hover) {
+  background: #f8fafc;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .placeholder {

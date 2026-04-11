@@ -43,7 +43,7 @@
           <!-- Tab 内容 -->
           <ReportPanel v-show="store.activeInsightTab === 'report'" @open-modal="openModal" />
           <IssuePanel v-show="store.activeInsightTab === 'issues'" />
-          <RoadmapPanel v-show="store.activeInsightTab === 'roadmap'" />
+          <RoadmapPanel v-show="store.activeInsightTab === 'roadmap'" @open-modal="openModal" />
         </div>
       </div>
       
