@@ -134,13 +134,17 @@
 ```json
 {
   "session_id": "repo_xxx",
-  "repo_url": "https://github.com/owner/repo"
+  "repo_url": "https://github.com/owner/repo",
+  "since_days": 90,
+  "limit": 100
 }
 ```
 
 字段约束：
 1. `session_id`、`repo_url` 至少提供一个。  
 2. 如仅提供 `repo_url`，服务端可生成对应 `session_id`。  
+3. `since_days`：可选，默认 `90`，范围 `1-365`；用于拉取 GitHub Issues/Commits 洞察（与 §3.1 同源）并参与评分融合。  
+4. `limit`：可选，默认 `100`，范围 `1-500`；单次扫描的 issue/commit 条数上限。  
 
 ### Response
 
