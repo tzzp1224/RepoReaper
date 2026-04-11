@@ -14,9 +14,11 @@ import asyncio
 import base64
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any, Set
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 import httpx
 
@@ -609,22 +611,52 @@ def parse_repo_url(url: str) -> Optional[tuple[str, str]]:
     Returns:
         (owner, repo) 元组，无效返回 None
     """
-    if url.endswith(".git"):
-        url = url[:-4]
-    
-    # 支持多种格式
-    # https://github.com/owner/repo
-    # github.com/owner/repo
-    # owner/repo
-    
-    parts = url.replace("https://", "").replace("http://", "").split("/")
-    
-    if "github.com" in parts:
-        idx = parts.index("github.com")
-        if len(parts) > idx + 2:
-            return (parts[idx + 1], parts[idx + 2])
-    elif len(parts) == 2:
-        # 直接是 owner/repo 格式
-        return (parts[0], parts[1])
-    
-    return None
+    if not url:
+        return None
+
+    raw = url.strip()
+
+    # 支持 SSH 格式: git@github.com:owner/repo(.git)
+    ssh_match = re.match(r"^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?/?$", raw, re.IGNORECASE)
+    if ssh_match:
+        owner = ssh_match.group(1).strip()
+        repo = ssh_match.group(2).strip()
+        return (owner, repo) if owner and repo else None
+
+    # 支持 owner/repo 直接输入
+    if "://" not in raw and raw.count("/") == 1 and not raw.lower().startswith("github.com/"):
+        owner, repo = raw.split("/", 1)
+        owner = owner.strip()
+        repo = repo.strip()
+        if repo.endswith(".git"):
+            repo = repo[:-4]
+        return (owner, repo) if owner and repo else None
+
+    # 兼容 github.com/owner/repo（无协议）
+    normalized = raw
+    if "://" not in normalized and normalized.lower().startswith("github.com/"):
+        normalized = f"https://{normalized}"
+
+    parsed = urlparse(normalized)
+    host = (parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+
+    if host != "github.com":
+        return None
+
+    # urlparse 会自动剥离 query/fragment
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if len(path_parts) < 2:
+        return None
+
+    owner = path_parts[0].strip()
+    repo = path_parts[1].strip()
+
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+
+    if not owner or not repo:
+        return None
+
+    return (owner, repo)
