@@ -15,7 +15,11 @@ from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
+import logging
+
 from app.core.config import settings, auto_eval_config as runtime_auto_eval_config
+
+logger = logging.getLogger(__name__)
 from app.services.agent_service import agent_stream
 from app.services.chat_service import process_chat_stream, get_eval_data, clear_eval_data
 from app.services.insights_service import issue_summary_stream, commit_roadmap_stream
@@ -189,6 +193,136 @@ async def check_repo_session(request: Request):
             "has_index": False,
             "available_languages": [],
         })
+
+
+# === 可复现评分 & 论文-代码对齐 (Owner: C, 路由编排: A) ===
+
+def _unified_success(data: dict) -> JSONResponse:
+    return JSONResponse({"status": "success", "data": data, "error": None})
+
+
+def _unified_error(code: str, message: str, status_code: int = 400) -> JSONResponse:
+    return JSONResponse(
+        {"status": "error", "data": None, "error": {"code": code, "message": message, "details": {}}},
+        status_code=status_code,
+    )
+
+
+async def _parse_json_body(request: Request) -> dict:
+    """
+    统一 JSON body 解析兜底：坏 JSON / 非 object body 一律抛 ValueError，
+    由路由层捕获后返回 INVALID_ARGUMENT。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise ValueError("Request body must be valid JSON")
+    if not isinstance(body, dict):
+        raise ValueError("Request body must be a JSON object, not array or scalar")
+    return body
+
+
+def _parse_insight_query_params(data: dict) -> tuple[int, int]:
+    """与 §3.1 一致：since_days、limit 可选，非法则回退默认。"""
+    since_days = data.get("since_days", 90)
+    limit = data.get("limit", 100)
+    if not isinstance(since_days, int) or not (1 <= since_days <= 365):
+        since_days = 90
+    if not isinstance(limit, int) or not (1 <= limit <= 500):
+        limit = 100
+    return since_days, limit
+
+
+@app.post("/api/repo/insight/issues-commits")
+async def repo_insight_issues_commits(request: Request):
+    """§3.1 Issues + Commits 洞察（成员 B 数据形态；实现供 C 评分融合与前端展示）"""
+    from app.services.issue_commit_insight_service import fetch_issue_commit_insight
+
+    try:
+        data = await _parse_json_body(request)
+    except ValueError as e:
+        return _unified_error("INVALID_ARGUMENT", str(e))
+
+    repo_url = (data.get("repo_url") or data.get("url") or "").strip()
+    if not repo_url:
+        return _unified_error("INVALID_ARGUMENT", "repo_url is required")
+
+    since_days, limit = _parse_insight_query_params(data)
+
+    result = await fetch_issue_commit_insight(repo_url, since_days=since_days, limit=limit)
+    if result.get("_upstream_error"):
+        return _unified_error("UPSTREAM_UNAVAILABLE", result["_upstream_error"], status_code=502)
+    return _unified_success({k: v for k, v in result.items() if not k.startswith("_")})
+
+
+@app.post("/api/repro/score")
+async def repro_score(request: Request):
+    """§3.2 可复现性评分"""
+    from app.services.repro_score_service import compute_repro_score
+
+    try:
+        data = await _parse_json_body(request)
+    except ValueError as e:
+        return _unified_error("INVALID_ARGUMENT", str(e))
+
+    session_id = data.get("session_id")
+    repo_url = data.get("repo_url") or data.get("url")
+
+    if not session_id and not repo_url:
+        return _unified_error("INVALID_ARGUMENT", "session_id or repo_url is required")
+
+    since_days, limit = _parse_insight_query_params(data)
+
+    try:
+        result = await compute_repro_score(
+            session_id=session_id,
+            repo_url=repo_url,
+            insight_since_days=since_days,
+            insight_limit=limit,
+        )
+        return _unified_success(result.to_dict())
+    except ValueError as e:
+        return _unified_error("INVALID_ARGUMENT", str(e))
+    except Exception as e:
+        logger.exception("repro_score failed")
+        return _unified_error("INTERNAL", str(e), status_code=500)
+
+
+@app.post("/api/paper/align")
+async def paper_align(request: Request):
+    """§3.3 论文-代码对齐"""
+    from app.services.paper_align_service import compute_paper_alignment
+
+    try:
+        data = await _parse_json_body(request)
+    except ValueError as e:
+        return _unified_error("INVALID_ARGUMENT", str(e))
+
+    paper_text = data.get("paper_text", "")
+    session_id = data.get("session_id")
+    repo_url = data.get("repo_url") or data.get("url")
+    top_k = data.get("top_k", 5)
+
+    if not paper_text or not paper_text.strip():
+        return _unified_error("INVALID_ARGUMENT", "paper_text is required")
+    if not session_id and not repo_url:
+        return _unified_error("INVALID_ARGUMENT", "session_id or repo_url is required")
+    if not isinstance(top_k, int) or not (1 <= top_k <= 20):
+        top_k = 5
+
+    try:
+        result = await compute_paper_alignment(
+            paper_text=paper_text,
+            session_id=session_id,
+            repo_url=repo_url,
+            top_k=top_k,
+        )
+        return _unified_success(result.to_dict())
+    except ValueError as e:
+        return _unified_error("INVALID_ARGUMENT", str(e))
+    except Exception as e:
+        logger.exception("paper_align failed")
+        return _unified_error("INTERNAL", str(e), status_code=500)
 
 
 @app.get("/analyze")

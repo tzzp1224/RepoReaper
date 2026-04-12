@@ -573,6 +573,88 @@ class GitHubClient:
         
         return content_map
 
+    # --------------------------------------------------------
+    # Issues / Commits（供 issue_commit_insight_service §3.1 使用）
+    # --------------------------------------------------------
+
+    async def list_repo_issues_open(
+        self,
+        repo: GitHubRepo,
+        *,
+        since: Optional[str] = None,
+        per_page: int = 100,
+        max_items: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """
+        列出仓库 open issues（不含 PR）。支持分页，最多 max_items 条。
+
+        Args:
+            since: ISO8601 UTC，仅返回此时间之后有更新的 issue（GitHub API 语义）
+        """
+        out: List[Dict[str, Any]] = []
+        page = 1
+        per_page = min(per_page, 100)
+        while len(out) < max_items:
+            params: Dict[str, Any] = {
+                "state": "open",
+                "per_page": per_page,
+                "page": page,
+            }
+            if since:
+                params["since"] = since
+            data = await self._request(
+                "GET",
+                f"/repos/{repo.owner}/{repo.name}/issues",
+                params=params,
+            )
+            if not isinstance(data, list) or not data:
+                break
+            for item in data:
+                if "pull_request" in item:
+                    continue
+                out.append(item)
+                if len(out) >= max_items:
+                    break
+            if len(data) < per_page:
+                break
+            page += 1
+        return out[:max_items]
+
+    async def list_repo_commits(
+        self,
+        repo: GitHubRepo,
+        *,
+        since: Optional[str] = None,
+        per_page: int = 100,
+        max_items: int = 500,
+        sha: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """列出提交（默认默认分支），支持 since（ISO8601）与分页。"""
+        out: List[Dict[str, Any]] = []
+        page = 1
+        per_page = min(per_page, 100)
+        branch = sha or repo.default_branch
+        while len(out) < max_items:
+            params: Dict[str, Any] = {
+                "sha": branch,
+                "per_page": per_page,
+                "page": page,
+            }
+            if since:
+                params["since"] = since
+            data = await self._request(
+                "GET",
+                f"/repos/{repo.owner}/{repo.name}/commits",
+                params=params,
+            )
+            if not isinstance(data, list) or not data:
+                break
+            out.extend(data)
+            if len(data) < per_page:
+                break
+            page += 1
+        return out[:max_items]
+
 
 # ============================================================
 # 全局单例管理
