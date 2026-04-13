@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="paper-workspace">
     <div class="paper-toolbar">
       <div class="toolbar-left">
@@ -41,18 +41,18 @@
 
           <div class="input-actions">
             <button
-              v-if="inputMode === 'text'"
+              v-if="inputMode === 'text' || inputMode === 'pdf'"
               type="button"
               class="secondary-btn"
               :class="{ active: store.paperHighlightMode }"
-              :disabled="!store.paperAlignText.trim()"
+              :disabled="selectPassagesDisabled"
               @click="toggleHighlightMode"
             >
               <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M4 15.5 5.2 12l7.9-7.9a1.8 1.8 0 0 1 2.5 2.5L7.7 14.5z" />
                 <path d="M11.8 5.4 14.6 8.2" />
               </svg>
-              <span>Select Passages</span>
+              <span>{{ store.paperHighlightMode ? 'Selecting Passages' : 'Select Passages' }}</span>
             </button>
             <input
               ref="fileInputRef"
@@ -107,10 +107,10 @@ Recommended: Abstract + Methods + Implementation Details"
           <template v-else>
             <div class="pdf-mode-shell">
               <div class="pdf-selection-tip">
-                Drag to select text passages from the PDF. Selections will be sent to alignment.
+                {{ store.paperHighlightMode ? 'Drag to select PDF passages. Selections will be sent to alignment.' : 'Click Select Passages to choose excerpts, or run alignment with the full PDF text.' }}
               </div>
               <div class="pdf-scroll-area">
-                <PdfDocumentViewer :file="store.paperPdfFile" />
+                <PdfDocumentViewer :file="store.paperPdfFile" :selection-enabled="store.paperHighlightMode" />
               </div>
             </div>
           </template>
@@ -318,10 +318,14 @@ const repoLabel = computed(() => {
 const runDisabled = computed(() => {
   return !store.sessionId || !store.compiledPaperText || store.paperAlignLoading || uploadingFile.value
 })
+const selectPassagesDisabled = computed(() => {
+  if (inputMode.value === 'pdf') return !store.paperPdfFile
+  return !store.paperAlignText.trim()
+})
 const runLabel = computed(() => {
   if (inputMode.value === 'pdf') {
     const count = store.paperSelections.length
-    return count > 0 ? `Run Alignment (${count} selection${count === 1 ? '' : 's'})` : 'Run Alignment'
+    return count > 0 ? `Run Alignment (${count} selection${count === 1 ? '' : 's'})` : 'Run Alignment (All)'
   }
   if (store.paperHighlights.length > 0) {
     const count = store.paperHighlights.length
@@ -356,7 +360,7 @@ function handlePaperResize(clientX) {
 }
 
 function toggleHighlightMode() {
-  if (!store.paperAlignText.trim()) return
+  if (selectPassagesDisabled.value) return
   store.setPaperHighlightMode(!store.paperHighlightMode)
   window.getSelection()?.removeAllRanges()
 }
@@ -380,7 +384,8 @@ async function handleFileUpload(event) {
 
   try {
     if (file.name.toLowerCase().endsWith('.pdf')) {
-      // PDF 妯″紡锛氱洿鎺ユ覆鏌擄紝涓嶆彁鍙栨枃鏈?      store.setPaperPdfFile(file)
+      // PDF mode renders the file in the browser and uses selected passages.
+      store.setPaperPdfFile(file)
       store.paperSelectionMode = 'pdf'
       store.clearPaperSelections()
       store.paperAlignText = ''
@@ -389,7 +394,8 @@ async function handleFileUpload(event) {
       store.setPaperUploadedFileName(file.name)
       inputMode.value = 'pdf'
     } else {
-      // 鏂囨湰妯″紡锛氭彁鍙栨枃鏈?      const text = await readUploadedText(file)
+      // Text mode reads the uploaded file content directly.
+      const text = await readUploadedText(file)
       if (!text) {
         throw new Error('No readable text was extracted from the selected file.')
       }
@@ -398,6 +404,7 @@ async function handleFileUpload(event) {
       store.clearPaperHighlights()
       store.setPaperHighlightMode(false)
       store.setPaperPdfFile(null)
+      store.clearPaperSelections()
       store.paperSelectionMode = 'text'
       inputMode.value = 'text'
     }

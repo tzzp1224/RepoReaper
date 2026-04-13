@@ -224,11 +224,17 @@ export const useAppStore = defineStore('app', () => {
   function addPaperSelection(text, meta = {}) {
     const cleaned = (text || '').replace(/\s+/g, ' ').trim()
     if (!cleaned) return
-    if (paperSelections.value.some(item => item.text === cleaned)) return
-    paperSelections.value.push({
+
+    const pageNumber = meta?.pageNumber ?? null
+    const duplicate = paperSelections.value.some(item => {
+      return item.text === cleaned && (item.meta?.pageNumber ?? null) === pageNumber
+    })
+    if (duplicate) return
+
+    paperSelections.value.unshift({
       id: `sel-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       text: cleaned,
-      meta
+      meta: { ...meta }
     })
   }
 

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="pdf-viewer">
     <div v-if="loadingDocument" class="pdf-state">Loading PDF...</div>
     <div v-else-if="error" class="pdf-state error">{{ error }}</div>
@@ -7,12 +7,35 @@
       <div v-if="renderingPages" class="pdf-rendering-state">Rendering PDF pages...</div>
       <section v-for="page in pages" :key="page.pageNumber" class="pdf-page-card">
         <div class="pdf-page-label">Page {{ page.pageNumber }}</div>
-        <div class="pdf-stage" :style="{ width: `${page.width}px`, height: `${page.height}px` }">
+        <div
+          :ref="setStageRef(page.pageNumber)"
+          class="pdf-stage"
+          :style="{
+            width: `${page.width}px`,
+            height: `${page.height}px`,
+            '--scale-factor': page.scale
+          }"
+        >
           <canvas :ref="setCanvasRef(page.pageNumber)"></canvas>
+          <div class="selection-highlight-layer" aria-hidden="true">
+            <template v-for="selection in getPageSelections(page.pageNumber)" :key="selection.id">
+              <span
+                v-for="(rect, rectIndex) in selection.meta?.rects || []"
+                :key="`${selection.id}-${rectIndex}`"
+                class="selection-highlight"
+                :style="highlightRectStyle(rect)"
+              ></span>
+            </template>
+          </div>
           <div
             :ref="setTextLayerRef(page.pageNumber)"
             class="textLayer"
-            :style="{ width: `${page.width}px`, height: `${page.height}px` }"
+            :class="{ 'selection-enabled': selectionEnabled }"
+            :style="{
+              width: `${page.width}px`,
+              height: `${page.height}px`,
+              '--scale-factor': page.scale
+            }"
             @mouseup="handleMouseUp(page.pageNumber)"
           ></div>
         </div>
@@ -34,6 +57,10 @@ const props = defineProps({
   file: {
     type: Object,
     default: null
+  },
+  selectionEnabled: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -44,6 +71,7 @@ const pages = ref([])
 const loadingDocument = ref(false)
 const renderingPages = ref(false)
 const error = ref('')
+const stageRefs = new Map()
 const canvasRefs = new Map()
 const textLayerRefs = new Map()
 const renderTasks = new Map()
@@ -60,9 +88,11 @@ watch(() => props.file, async file => {
   error.value = ''
   loadingDocument.value = false
   renderingPages.value = false
+  stageRefs.clear()
   canvasRefs.clear()
   textLayerRefs.clear()
   store.setPaperPdfPages([])
+  store.paperAlignText = ''
 
   if (!file) return
 
@@ -87,12 +117,14 @@ watch(() => props.file, async file => {
       if (runId !== loadRunId) return
 
       const page = await pdf.getPage(pageNumber)
-      const viewport = page.getViewport({ scale: 1.35 })
+      const scale = 1.35
+      const viewport = page.getViewport({ scale })
 
       nextPages.push({
         pageNumber,
         page: markRaw(page),
         viewport,
+        scale,
         width: viewport.width,
         height: viewport.height
       })
@@ -111,9 +143,14 @@ watch(() => props.file, async file => {
 
     await nextTick()
 
+    const pageTexts = []
     for (const page of nextPages) {
       if (runId !== loadRunId) return
-      await renderPage(page, runId)
+      pageTexts[page.pageNumber - 1] = await renderPage(page, runId)
+    }
+
+    if (runId === loadRunId) {
+      store.paperAlignText = pageTexts.filter(Boolean).join('\n\n')
     }
 
     emit('loaded', nextPages)
@@ -133,6 +170,16 @@ onBeforeUnmount(() => {
   loadRunId += 1
   stopActiveWork()
 })
+
+function setStageRef(pageNumber) {
+  return element => {
+    if (!element) {
+      stageRefs.delete(pageNumber)
+      return
+    }
+    stageRefs.set(pageNumber, element)
+  }
+}
 
 function setCanvasRef(pageNumber) {
   return element => {
@@ -154,13 +201,68 @@ function setTextLayerRef(pageNumber) {
   }
 }
 
+function getPageSelections(pageNumber) {
+  return store.paperSelections.filter(selection => selection.meta?.pageNumber === pageNumber)
+}
+
+function highlightRectStyle(rect) {
+  return {
+    left: `${rect.left}px`,
+    top: `${rect.top}px`,
+    width: `${rect.width}px`,
+    height: `${rect.height}px`
+  }
+}
+
 function handleMouseUp(pageNumber) {
   const selection = window.getSelection()
-  const text = selection?.toString().trim()
+  if (!props.selectionEnabled) {
+    selection?.removeAllRanges()
+    return
+  }
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return
+
+  const text = selection.toString().trim()
   if (!text) return
 
-  store.addPaperSelection(text, { pageNumber })
+  const textLayer = textLayerRefs.get(pageNumber)
+  const stage = stageRefs.get(pageNumber)
+  const range = selection.getRangeAt(0)
+
+  if (!textLayer || !stage) {
+    selection.removeAllRanges()
+    return
+  }
+  if (!textLayer.contains(range.startContainer) || !textLayer.contains(range.endContainer)) {
+    selection.removeAllRanges()
+    return
+  }
+
+  const rects = getSelectionRects(range, stage)
+  store.addPaperSelection(text, { pageNumber, rects })
   selection.removeAllRanges()
+}
+
+function getSelectionRects(range, stage) {
+  const stageRect = stage.getBoundingClientRect()
+  const stageWidth = stageRect.width
+  const stageHeight = stageRect.height
+
+  return Array.from(range.getClientRects())
+    .map(rect => {
+      const left = Math.max(rect.left - stageRect.left, 0)
+      const top = Math.max(rect.top - stageRect.top, 0)
+      const right = Math.min(rect.right - stageRect.left, stageWidth)
+      const bottom = Math.min(rect.bottom - stageRect.top, stageHeight)
+
+      return {
+        left,
+        top,
+        width: Math.max(right - left, 0),
+        height: Math.max(bottom - top, 0)
+      }
+    })
+    .filter(rect => rect.width > 1 && rect.height > 1)
 }
 
 async function renderPage(pageInfo, runId) {
@@ -183,6 +285,7 @@ async function renderPage(pageInfo, runId) {
   canvas.style.width = `${pageInfo.width}px`
   canvas.style.height = `${pageInfo.height}px`
   context.clearRect(0, 0, canvas.width, canvas.height)
+  textLayerContainer.style.setProperty('--scale-factor', pageInfo.scale)
   textLayerContainer.replaceChildren()
 
   const renderTask = pageInfo.page.render({
@@ -198,11 +301,12 @@ async function renderPage(pageInfo, runId) {
     renderTasks.delete(pageInfo.pageNumber)
   }
 
-  if (runId !== loadRunId) return
+  if (runId !== loadRunId) return ''
 
   const textContent = await pageInfo.page.getTextContent()
-  if (runId !== loadRunId) return
+  if (runId !== loadRunId) return ''
 
+  const pageText = extractPageText(textContent)
   const textLayer = new pdfjsLib.TextLayer({
     textContentSource: textContent,
     container: textLayerContainer,
@@ -215,6 +319,17 @@ async function renderPage(pageInfo, runId) {
   } finally {
     textLayers.delete(pageInfo.pageNumber)
   }
+
+  return pageText
+}
+
+function extractPageText(textContent) {
+  return textContent.items
+    .map(item => `${item.str}${item.hasEOL ? '\n' : ' '}`)
+    .join('')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 function stopActiveWork() {
@@ -327,11 +442,33 @@ function isCancellationError(loadError) {
   z-index: 0;
 }
 
-.pdf-stage :deep(.textLayer) {
+.selection-highlight-layer {
   position: absolute;
   inset: 0;
   z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.selection-highlight {
+  position: absolute;
+  border-radius: 2px;
+  background: rgba(34, 197, 94, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(22, 163, 74, 0.18);
+}
+
+.pdf-stage :deep(.textLayer) {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  user-select: none;
+}
+
+.pdf-stage :deep(.textLayer.selection-enabled) {
+  pointer-events: auto;
   user-select: text;
+  cursor: text;
 }
 
 .pdf-stage :deep(.textLayer ::selection) {
