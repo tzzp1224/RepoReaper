@@ -19,14 +19,14 @@
 
 <script setup>
 import { computed } from 'vue'
-import { marked } from 'marked'
 import { useAppStore } from '../stores/app'
 import { useInsights } from '../composables/useInsights'
+import { renderMarkdownSafe } from '../utils/markdownSafe'
 
 const store = useAppStore()
 const { fetchIssues } = useInsights()
 
-const parsedHtml = computed(() => store.issueNotes ? marked.parse(store.issueNotes) : '')
+const parsedHtml = computed(() => (store.issueNotes ? renderMarkdownSafe(store.issueNotes) : ''))
 </script>
 
 <style scoped>

@@ -36,9 +36,9 @@
 
 <script setup>
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
-import { marked } from 'marked'
 import mermaid from 'mermaid'
 import { useAppStore } from '../stores/app'
+import { renderMarkdownSafe } from '../utils/markdownSafe'
 import {
   initializeMermaid,
   sanitizeMermaidCode,
@@ -142,7 +142,7 @@ function updateReportContent(markdown) {
   if (!reportContentRef.value) return
   
   // 1. 更新 HTML
-  reportContentRef.value.innerHTML = marked.parse(markdown)
+  reportContentRef.value.innerHTML = renderMarkdownSafe(markdown)
   
   // 2. 立即同步恢复已缓存的 mermaid（防止闪烁）
   restoreCachedMermaids(reportContentRef.value)
@@ -385,7 +385,7 @@ function printReport() {
   if (!store.currentReport) return
   
   const repoName = store.currentRepoUrl.split('/').pop() || 'report'
-  const processedHtml = marked.parse(store.currentReport).replace(
+  const processedHtml = renderMarkdownSafe(store.currentReport).replace(
     /<pre class="mermaid">[\s\S]*?<\/pre>/g,
     '<div class="mermaid-placeholder">📊 Mermaid diagram (view in browser)</div>'
   )

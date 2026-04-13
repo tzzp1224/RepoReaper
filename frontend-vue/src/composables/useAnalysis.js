@@ -39,6 +39,8 @@ export function useAnalysis() {
     store.hideHint()
     store.buttonState = BTN_STATE.ANALYZING
     store.chatEnabled = false
+    store.resetInsightsState()
+    store.resetScoreState()
     
     // 获取 session ID
     if (!store.sessionId || store.repoUrl !== store.currentRepoUrl) {

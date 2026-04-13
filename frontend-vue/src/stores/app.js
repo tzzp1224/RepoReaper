@@ -169,6 +169,13 @@ export const useAppStore = defineStore('app', () => {
     scoreError.value = ''
   }
 
+  function resetInsightsState() {
+    issueNotes.value = ''
+    roadmapContent.value = ''
+    isIssueStreaming.value = false
+    isRoadmapStreaming.value = false
+  }
+
   function resetPaperAlignState() {
     paperAlignText.value = ''
     paperAlignTopK.value = 5
@@ -256,6 +263,7 @@ export const useAppStore = defineStore('app', () => {
     // URL 变化时清空缓存
     if (repoUrl.value !== currentRepoUrl.value) {
       clearCache()
+      resetInsightsState()
       resetScoreState()
       resetPaperAlignState()
     }
@@ -360,6 +368,7 @@ export const useAppStore = defineStore('app', () => {
     cacheReport,
     getCachedReport,
     clearCache,
+    resetInsightsState,
     resetScoreState,
     resetPaperAlignState,
     setPaperUploadedFileName,

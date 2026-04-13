@@ -78,9 +78,9 @@
 
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
-import { marked } from 'marked'
 import { useAppStore } from '../stores/app'
 import { useChat } from '../composables/useChat'
+import { renderMarkdownSafe } from '../utils/markdownSafe'
 
 const store = useAppStore()
 const { sendMessage, stopGeneration } = useChat()
@@ -105,7 +105,7 @@ const suggestedQuestions = [
 const showSuggestions = computed(() => store.chatMessages.length <= 2 && !store.isChatGenerating)
 
 function renderMarkdown(content) {
-  return marked.parse(content || '')
+  return renderMarkdownSafe(content || '')
 }
 
 function normalizeAssistantContent(content) {

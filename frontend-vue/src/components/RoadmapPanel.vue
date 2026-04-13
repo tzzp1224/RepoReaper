@@ -27,10 +27,10 @@
 
 <script setup>
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
-import { marked } from 'marked'
 import mermaid from 'mermaid'
 import { useAppStore } from '../stores/app'
 import { useInsights } from '../composables/useInsights'
+import { renderMarkdownSafe } from '../utils/markdownSafe'
 import {
   initializeMermaid,
   sanitizeMermaidCode,
@@ -121,7 +121,7 @@ function restoreCachedMermaids(container) {
 
 function updateHtml(markdown) {
   if (!htmlRef.value) return
-  htmlRef.value.innerHTML = marked.parse(markdown || '')
+  htmlRef.value.innerHTML = renderMarkdownSafe(markdown || '')
   restoreCachedMermaids(htmlRef.value)
 }
 
