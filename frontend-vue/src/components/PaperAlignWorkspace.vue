@@ -729,8 +729,11 @@ onUnmounted(() => {
   border: 0;
   background: #fff;
   color: #44403c;
+  font-family: ui-sans-serif, system-ui, sans-serif;
   font-size: 14px;
-  line-height: 1.65;
+  line-height: 1.75;
+  letter-spacing: 0.01em;
+  word-spacing: 0.02em;
   resize: none;
   outline: none;
   box-sizing: border-box;
@@ -768,12 +771,12 @@ onUnmounted(() => {
   overflow: auto;
   white-space: pre-wrap;
   user-select: text;
-  cursor: crosshair;
+  cursor: text;
 }
 
 .highlight-mark {
-  background: rgba(251, 191, 36, 0.32);
-  border-bottom: 2px solid rgba(217, 119, 6, 0.55);
+  background: rgba(34, 197, 94, 0.24);
+  border-bottom: 2px solid rgba(22, 163, 74, 0.45);
   border-radius: 2px;
   cursor: pointer;
   padding: 1px 0;
