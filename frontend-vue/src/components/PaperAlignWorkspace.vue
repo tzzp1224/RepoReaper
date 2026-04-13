@@ -281,11 +281,11 @@ const uploadingFile = ref(false)
 const fileError = ref('')
 const inputMode = ref('text')  // 'text' | 'pdf'
 
-const RESIZER_WIDTH = 4
-const LEFT_MIN = 360
-const RIGHT_MIN = 420
-const DEFAULT_LEFT_RATIO = 0.42
-const LEFT_MAX_RATIO = 0.65
+const RESIZER_WIDTH = 10
+const LEFT_MIN = 380
+const RIGHT_MIN = 360
+const DEFAULT_LEFT_RATIO = 0.55
+const LEFT_MAX_RATIO = 0.75
 
 const gridStyle = computed(() => ({
   '--paper-left-width': paperLeftPaneWidth.value ? `${paperLeftPaneWidth.value}px` : `${DEFAULT_LEFT_RATIO * 100}%`,
@@ -622,26 +622,6 @@ onUnmounted(() => {
   background: #fff;
 }
 
-.paper-resizer {
-  width: 4px;
-  background: transparent;
-  border: 0;
-}
-
-.paper-resizer:hover {
-  background: #e7e5e4;
-}
-
-.paper-resizer:deep(.resizer-handle) {
-  width: 100%;
-  height: 100%;
-  border-radius: 0;
-  background: transparent;
-}
-
-.paper-resizer:hover:deep(.resizer-handle) {
-  background: #d6d3d1;
-}
 
 .input-header {
   display: flex;
