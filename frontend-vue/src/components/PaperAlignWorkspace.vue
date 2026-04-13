@@ -12,7 +12,6 @@
         <div class="toolbar-divider"></div>
         <div class="toolbar-copy">
           <span class="toolbar-title">Paper-to-Code Alignment</span>
-          <span class="repo-dot">路</span>
           <span class="toolbar-repo">{{ repoLabel }}</span>
         </div>
       </div>
@@ -574,7 +573,6 @@ onUnmounted(() => {
   color: #1c1917;
 }
 
-.repo-dot,
 .toolbar-repo {
   font-size: 12px;
   color: #78716c;
@@ -1178,5 +1176,3 @@ blockquote {
   }
 }
 </style>
-
-

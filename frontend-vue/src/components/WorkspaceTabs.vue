@@ -13,7 +13,12 @@
       </button>
     </div>
 
-    <button class="paper-align-btn" type="button" @click="$emit('paper-align')">
+    <button
+      class="paper-align-btn"
+      type="button"
+      :disabled="!paperAlignEnabled"
+      @click="$emit('paper-align')"
+    >
       <span>Paper Align</span>
       <span class="paper-align-icon" aria-hidden="true" v-html="paperAlignIcon"></span>
     </button>
@@ -25,6 +30,10 @@ defineProps({
   activeTab: {
     type: String,
     required: true
+  },
+  paperAlignEnabled: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -38,6 +47,12 @@ const tabs = [
       '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h5.5L15 7v9.5H6z"/><path d="M11.5 3.5V7H15"/><path d="M8 10h5"/><path d="M8 13h5"/></svg>'
   },
   {
+    id: 'score',
+    label: 'Score',
+    icon:
+      '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15.5V9.5"/><path d="M10 15.5V5.5"/><path d="M16 15.5V11.5"/></svg>'
+  },
+  {
     id: 'issues',
     label: 'Issues Notebook',
     icon:
@@ -48,12 +63,6 @@ const tabs = [
     label: 'Commit Roadmap',
     icon:
       '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="10" r="1.8"/><circle cx="15" cy="6" r="1.8"/><circle cx="15" cy="14" r="1.8"/><path d="M6.8 10h3.4a2 2 0 0 0 1.41-.59L13.2 7.8"/><path d="M10.2 10a2 2 0 0 1 1.41.59l1.59 1.61"/></svg>'
-  },
-  {
-    id: 'score',
-    label: 'Score',
-    icon:
-      '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15.5V9.5"/><path d="M10 15.5V5.5"/><path d="M16 15.5V11.5"/></svg>'
   }
 ]
 
@@ -144,6 +153,13 @@ const paperAlignIcon =
 .paper-align-btn:hover {
   background: #e7e5e4;
   border-color: #d6d3d1;
+}
+
+.paper-align-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  background: #f5f5f4;
+  border-color: var(--border-color);
 }
 
 .paper-align-icon {

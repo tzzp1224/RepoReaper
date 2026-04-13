@@ -41,6 +41,9 @@ export function useAnalysis() {
     store.chatEnabled = false
     store.resetInsightsState()
     store.resetScoreState()
+    if (!regenerateOnly) {
+      store.hasAnalyzedContext = false
+    }
     
     // 获取 session ID
     if (!store.sessionId || store.repoUrl !== store.currentRepoUrl) {
@@ -85,6 +88,7 @@ export function useAnalysis() {
         store.isStreaming = false
         
         store.cacheReport(store.language, store.currentReport)
+        store.hasAnalyzedContext = true
         store.buttonState = BTN_STATE.REANALYZE
         store.setHint('reportReady', 'success')
         store.chatEnabled = true
@@ -97,8 +101,10 @@ export function useAnalysis() {
         store.isStreaming = false
         
         if (store.lastCheckResult?.has_index) {
+          store.hasAnalyzedContext = true
           store.buttonState = BTN_STATE.GENERATE
         } else {
+          store.hasAnalyzedContext = false
           store.buttonState = BTN_STATE.ANALYZE
         }
       } else {
@@ -110,6 +116,7 @@ export function useAnalysis() {
       store.addLog('❌ Connection lost', '#b91c1c')
       eventSource.close()
       store.isStreaming = false
+      store.hasAnalyzedContext = Boolean(store.lastCheckResult?.has_index)
       store.buttonState = BTN_STATE.ANALYZE
     }
   }
@@ -126,6 +133,8 @@ export function useAnalysis() {
     const cached = store.getCachedReport(newLang)
     if (cached) {
       store.currentReport = cached
+      store.currentRepoUrl = store.repoUrl
+      store.hasAnalyzedContext = true
       store.buttonState = BTN_STATE.REANALYZE
       store.chatEnabled = true
       store.setHint('langSwitched', 'success')
@@ -146,26 +155,33 @@ export function useAnalysis() {
       if (result.exists && result.report) {
         store.cacheReport(newLang, result.report)
         store.currentReport = result.report
+        store.currentRepoUrl = store.repoUrl
+        store.hasAnalyzedContext = true
         store.buttonState = BTN_STATE.REANALYZE
         store.chatEnabled = true
         store.setHint('langSwitched', 'success')
         store.addLog(`📦 Loaded ${newLang.toUpperCase()} report`, '#15803d')
       } else if (result.has_index) {
         store.currentReport = ''
-    store.resetChatMessages()
+        store.currentRepoUrl = store.repoUrl
+        store.hasAnalyzedContext = true
+        store.resetChatMessages()
         store.buttonState = BTN_STATE.GENERATE
         store.chatEnabled = false
         store.setHint('langNeedGenerate', 'info')
         store.addLog(`ℹ️ No ${newLang.toUpperCase()} report. Click Generate.`, '#f59e0b')
       } else {
         store.currentReport = ''
-    store.resetChatMessages()
+        store.currentRepoUrl = ''
+        store.hasAnalyzedContext = false
+        store.resetChatMessages()
         store.buttonState = BTN_STATE.ANALYZE
         store.chatEnabled = false
         store.setHint('needAnalyze', 'warning')
       }
     } catch (e) {
       console.error('Language switch check failed:', e)
+      store.hasAnalyzedContext = false
       store.buttonState = BTN_STATE.ANALYZE
     }
   }

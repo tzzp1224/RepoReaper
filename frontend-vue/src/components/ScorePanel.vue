@@ -2,8 +2,29 @@
   <div class="score-panel">
     <div class="score-content">
       <div v-if="store.scoreLoading" class="panel-state">Reproducibility score is being prepared.</div>
+      <div v-else-if="!store.canUseAnalyzedContext" class="placeholder">
+        <div class="placeholder-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 15.5V9.5" />
+            <path d="M10 15.5V5.5" />
+            <path d="M16 15.5V11.5" />
+          </svg>
+        </div>
+        <div class="placeholder-title">Reproducibility Score</div>
+        <div class="placeholder-text">The reproducibility score will be generated here.</div>
+      </div>
       <div v-else-if="store.scoreError" class="panel-state error">{{ store.scoreError }}</div>
-      <div v-else-if="!store.scoreResult" class="panel-state">Run analysis or open the Score tab to load scoring results.</div>
+      <div v-else-if="!store.scoreResult" class="placeholder">
+        <div class="placeholder-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 15.5V9.5" />
+            <path d="M10 15.5V5.5" />
+            <path d="M16 15.5V11.5" />
+          </svg>
+        </div>
+        <div class="placeholder-title">Reproducibility Score</div>
+        <div class="placeholder-text">The reproducibility score will be generated here.</div>
+      </div>
       <template v-else>
         <section class="score-summary-card">
           <div class="score-ring-wrap">
@@ -85,7 +106,12 @@ const dimensions = computed(() => {
 })
 
 watch(() => props.active, value => {
-  if (value && !store.scoreLoading && !store.scoreResult && (store.sessionId || store.repoUrl)) {
+  if (
+    value &&
+    !store.scoreLoading &&
+    !store.scoreResult &&
+    store.canUseAnalyzedContext
+  ) {
     loadScore()
   }
 }, { immediate: true })
@@ -120,6 +146,47 @@ watch(() => props.active, value => {
 
 .panel-state.error {
   color: #b91c1c;
+}
+
+.placeholder {
+  min-height: 280px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  padding: 32px;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.placeholder-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  background: #f5f5f4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #78716c;
+}
+
+.placeholder-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.placeholder-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #57534e;
+}
+
+.placeholder-text {
+  font-size: 12px;
+  color: #a8a29e;
 }
 
 .score-summary-card,

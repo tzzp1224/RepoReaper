@@ -13,8 +13,9 @@
 
           <WorkspaceTabs
             :active-tab="store.activeInsightTab"
+            :paper-align-enabled="store.canUseAnalyzedContext"
             @change="handleTabChange"
-            @paper-align="view = 'paper-align'"
+            @paper-align="handlePaperAlign"
           />
 
           <div class="left-pane-body">
@@ -109,12 +110,20 @@ function handleResize(clientX) {
 
 function handleTabChange(tab) {
   store.activeInsightTab = tab
-  if (tab === 'issues' && !store.issueNotes && !store.isIssueStreaming && store.sessionId) {
+  if (tab === 'issues' && !store.issueNotes && !store.isIssueStreaming && store.canUseAnalyzedContext) {
     fetchIssues()
   }
-  if (tab === 'roadmap' && !store.roadmapContent && !store.isRoadmapStreaming && store.sessionId) {
+  if (tab === 'roadmap' && !store.roadmapContent && !store.isRoadmapStreaming && store.canUseAnalyzedContext) {
     fetchRoadmap()
   }
+}
+
+function handlePaperAlign() {
+  if (!store.canUseAnalyzedContext) {
+    store.addLog('ℹ️ Analyze or load repository context before opening Paper Align.', '#f59e0b')
+    return
+  }
+  view.value = 'paper-align'
 }
 
 function openModal(content) {

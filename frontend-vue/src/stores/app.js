@@ -28,6 +28,7 @@ export const useAppStore = defineStore('app', () => {
   const language = ref('en')
   const sessionId = ref(null)
   const currentRepoUrl = ref('')  // 已分析的 URL
+  const hasAnalyzedContext = ref(false)
   
   // === 按钮状态 ===
   const buttonState = ref(BTN_STATE.ANALYZE)
@@ -56,7 +57,7 @@ export const useAppStore = defineStore('app', () => {
   const lastCheckResult = ref(null)
   
   // === Insights: Issue 摘要 & Commit Roadmap ===
-  const activeInsightTab = ref('report')  // 'report' | 'issues' | 'roadmap'
+  const activeInsightTab = ref('report')  // 'report' | 'score' | 'issues' | 'roadmap'
   const issueNotes = ref('')
   const roadmapContent = ref('')
   const isIssueStreaming = ref(false)
@@ -110,6 +111,18 @@ export const useAppStore = defineStore('app', () => {
     }
     return map[buttonState.value] || 'btn-analyze'
   })
+
+  const isCurrentRepoContext = computed(() =>
+    Boolean(repoUrl.value.trim()) &&
+    Boolean(currentRepoUrl.value) &&
+    repoUrl.value === currentRepoUrl.value
+  )
+
+  const canUseAnalyzedContext = computed(() =>
+    hasAnalyzedContext.value &&
+    isCurrentRepoContext.value &&
+    Boolean(sessionId.value)
+  )
 
   const compiledPaperText = computed(() => {
     if (paperSelectionMode.value === 'pdf' && paperSelections.value.length > 0) {
@@ -257,6 +270,8 @@ export const useAppStore = defineStore('app', () => {
     if (!repoUrl.value.trim()) {
       buttonState.value = BTN_STATE.ANALYZE
       hideHint()
+      hasAnalyzedContext.value = false
+      currentRepoUrl.value = ''
       return null
     }
     
@@ -266,6 +281,9 @@ export const useAppStore = defineStore('app', () => {
       resetInsightsState()
       resetScoreState()
       resetPaperAlignState()
+      hasAnalyzedContext.value = false
+      currentRepoUrl.value = ''
+      chatEnabled.value = false
     }
     
     buttonState.value = BTN_STATE.CHECKING
@@ -289,6 +307,8 @@ export const useAppStore = defineStore('app', () => {
       // 有报告
       currentReport.value = result.report
       cacheReport(language.value, result.report)
+      hasAnalyzedContext.value = true
+      currentRepoUrl.value = repoUrl.value
       buttonState.value = BTN_STATE.REANALYZE
       chatEnabled.value = true
       setHint('reportReady', 'success')
@@ -296,6 +316,8 @@ export const useAppStore = defineStore('app', () => {
     } else if (result.has_index) {
       // 有索引无报告
       currentReport.value = ''
+      hasAnalyzedContext.value = true
+      currentRepoUrl.value = repoUrl.value
       buttonState.value = BTN_STATE.GENERATE
       chatEnabled.value = false
       setHint('canGenerate', 'info')
@@ -303,6 +325,8 @@ export const useAppStore = defineStore('app', () => {
     } else {
       // 全新仓库
       currentReport.value = ''
+      hasAnalyzedContext.value = false
+      currentRepoUrl.value = ''
       buttonState.value = BTN_STATE.ANALYZE
       chatEnabled.value = false
       setHint('needAnalyze', 'warning')
@@ -316,6 +340,7 @@ export const useAppStore = defineStore('app', () => {
     language,
     sessionId,
     currentRepoUrl,
+    hasAnalyzedContext,
     buttonState,
     cachedReports,
     currentReport,
@@ -355,6 +380,7 @@ export const useAppStore = defineStore('app', () => {
     buttonText,
     buttonDisabled,
     buttonClass,
+    canUseAnalyzedContext,
     compiledPaperText,
     
     // Actions

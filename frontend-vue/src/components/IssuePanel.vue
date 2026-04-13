@@ -1,11 +1,16 @@
 <template>
   <div class="insight-panel">
+    <div class="panel-toolbar">
+      <button class="refresh-btn" :disabled="!canRefresh" @click="refreshIssues">
+        Refresh
+      </button>
+    </div>
     <div class="markdown-body" ref="contentRef">
       <div v-if="!store.issueNotes && !store.isIssueStreaming" class="placeholder">
         <div class="placeholder-icon">📋</div>
         <div class="placeholder-title">Issues Notebook</div>
         <div class="placeholder-text">Run analysis to surface identified code issues and suggestions.</div>
-        <button class="fetch-btn" @click="fetchIssues" :disabled="!store.sessionId">
+        <button class="fetch-btn" @click="refreshIssues" :disabled="!canRefresh">
           📋 Fetch Issues
         </button>
       </div>
@@ -27,6 +32,11 @@ const store = useAppStore()
 const { fetchIssues } = useInsights()
 
 const parsedHtml = computed(() => (store.issueNotes ? renderMarkdownSafe(store.issueNotes) : ''))
+const canRefresh = computed(() => store.canUseAnalyzedContext && !store.isIssueStreaming)
+
+function refreshIssues() {
+  fetchIssues({ force: true })
+}
 </script>
 
 <style scoped>
@@ -36,6 +46,36 @@ const parsedHtml = computed(() => (store.issueNotes ? renderMarkdownSafe(store.i
   flex-direction: column;
   overflow: hidden;
   background: #faf9f6;
+}
+
+.panel-toolbar {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-color);
+  background: #fff;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.refresh-btn {
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #57534e;
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.refresh-btn:hover:not(:disabled) {
+  background: #f5f5f4;
+  border-color: #d6d3d1;
+}
+
+.refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .markdown-body {

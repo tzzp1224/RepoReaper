@@ -1,5 +1,10 @@
 <template>
   <div class="insight-panel">
+    <div class="panel-toolbar">
+      <button class="refresh-btn" :disabled="!canRefresh" @click="refreshRoadmap">
+        Refresh
+      </button>
+    </div>
     <div class="markdown-body" ref="contentRef">
       <div v-if="!store.roadmapContent && !store.isRoadmapStreaming" class="placeholder">
         <div class="placeholder-icon" aria-hidden="true">
@@ -13,7 +18,7 @@
         </div>
         <div class="placeholder-title">Commit Roadmap</div>
         <div class="placeholder-text">AI-generated improvement roadmap will appear here after analysis.</div>
-        <button class="fetch-btn" @click="fetchRoadmap" :disabled="!store.sessionId">
+        <button class="fetch-btn" @click="refreshRoadmap" :disabled="!canRefresh">
           🗺️ Generate Roadmap
         </button>
       </div>
@@ -26,7 +31,7 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import mermaid from 'mermaid'
 import { useAppStore } from '../stores/app'
 import { useInsights } from '../composables/useInsights'
@@ -43,12 +48,20 @@ const { fetchRoadmap } = useInsights()
 const contentRef = ref(null)
 const htmlRef = ref(null)
 const emit = defineEmits(['openModal'])
+const canRefresh = computed(() => store.canUseAnalyzedContext && !store.isRoadmapStreaming)
 
 const RENDER_THROTTLE_MS = 400
+const MARKDOWN_RENDER_THROTTLE_MS = 120
 let mermaidRenderTimeout = null
+let markdownRenderTimeout = null
+let pendingMarkdown = ''
 const isRendering = ref(false)
 let lastRenderTime = 0
 const renderedMermaidCache = new Map()
+
+function refreshRoadmap() {
+  fetchRoadmap({ force: true })
+}
 
 // 初始化 Mermaid，并在挂载时恢复已有内容（如从 PaperAlign 返回后重新挂载）
 onMounted(() => {
@@ -65,6 +78,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   clearMermaidRenderTimeout()
+  clearMarkdownRenderTimeout()
 })
 
 function clearMermaidRenderTimeout() {
@@ -72,6 +86,14 @@ function clearMermaidRenderTimeout() {
     clearTimeout(mermaidRenderTimeout)
     mermaidRenderTimeout = null
   }
+}
+
+function clearMarkdownRenderTimeout() {
+  if (markdownRenderTimeout) {
+    clearTimeout(markdownRenderTimeout)
+    markdownRenderTimeout = null
+  }
+  pendingMarkdown = ''
 }
 
 function getCompleteMermaidCodes(markdown) {
@@ -125,9 +147,27 @@ function updateHtml(markdown) {
   restoreCachedMermaids(htmlRef.value)
 }
 
+function scheduleMarkdownRender(markdown, immediate = false) {
+  if (immediate) {
+    clearMarkdownRenderTimeout()
+    updateHtml(markdown)
+    return
+  }
+
+  pendingMarkdown = markdown
+  if (markdownRenderTimeout) return
+
+  markdownRenderTimeout = setTimeout(() => {
+    markdownRenderTimeout = null
+    updateHtml(pendingMarkdown)
+    pendingMarkdown = ''
+  }, MARKDOWN_RENDER_THROTTLE_MS)
+}
+
 watch(() => store.roadmapContent, async (newVal, oldVal) => {
   if (!newVal) {
     clearMermaidRenderTimeout()
+    clearMarkdownRenderTimeout()
     if (htmlRef.value) {
       htmlRef.value.innerHTML = ''
     }
@@ -142,7 +182,7 @@ watch(() => store.roadmapContent, async (newVal, oldVal) => {
   }
 
   await nextTick()
-  updateHtml(newVal)
+  scheduleMarkdownRender(newVal)
 
   if (!newVal.includes('```mermaid')) return
 
@@ -165,8 +205,9 @@ watch(() => store.roadmapContent, async (newVal, oldVal) => {
 watch(() => store.isRoadmapStreaming, async (streaming, was) => {
   if (was && !streaming && store.roadmapContent) {
     clearMermaidRenderTimeout()
+    clearMarkdownRenderTimeout()
     await nextTick()
-    updateHtml(store.roadmapContent)
+    scheduleMarkdownRender(store.roadmapContent, true)
     setTimeout(async () => {
       await renderAllCompleteMermaidBlocks(true)
     }, 150)
@@ -175,8 +216,9 @@ watch(() => store.isRoadmapStreaming, async (streaming, was) => {
 
 watch(() => store.activeInsightTab, async (tab) => {
   if (tab === 'roadmap' && store.roadmapContent && !store.isRoadmapStreaming) {
+    clearMarkdownRenderTimeout()
     await nextTick()
-    updateHtml(store.roadmapContent)
+    scheduleMarkdownRender(store.roadmapContent, true)
     setTimeout(async () => {
       await renderAllCompleteMermaidBlocks(true)
     }, 100)
@@ -286,6 +328,36 @@ async function renderSingleCodeBlock(codeBlock, isFinalRender = false) {
   flex-direction: column;
   overflow: hidden;
   background: #faf9f6;
+}
+
+.panel-toolbar {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-color);
+  background: #fff;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.refresh-btn {
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #57534e;
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.refresh-btn:hover:not(:disabled) {
+  background: #f5f5f4;
+  border-color: #d6d3d1;
+}
+
+.refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .markdown-body {

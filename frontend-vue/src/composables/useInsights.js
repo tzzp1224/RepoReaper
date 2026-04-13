@@ -9,10 +9,44 @@ export function useInsights() {
 
   let issueEventSource = null
   let roadmapEventSource = null
+  let roadmapChunkBuffer = ''
+  let roadmapFlushTimer = null
+  const ROADMAP_FLUSH_MS = 80
 
-  function fetchIssues() {
-    if (!store.repoUrl.trim() || !store.sessionId) return
+  function flushRoadmapChunks() {
+    if (!roadmapChunkBuffer) return
+    store.roadmapContent += roadmapChunkBuffer
+    roadmapChunkBuffer = ''
+  }
+
+  function scheduleRoadmapFlush() {
+    if (roadmapFlushTimer) return
+    roadmapFlushTimer = setTimeout(() => {
+      roadmapFlushTimer = null
+      flushRoadmapChunks()
+    }, ROADMAP_FLUSH_MS)
+  }
+
+  function resetRoadmapBuffer() {
+    if (roadmapFlushTimer) {
+      clearTimeout(roadmapFlushTimer)
+      roadmapFlushTimer = null
+    }
+    roadmapChunkBuffer = ''
+  }
+
+  function hasValidAnalysisContext() {
+    return store.canUseAnalyzedContext
+  }
+
+  function fetchIssues(options = {}) {
+    const force = Boolean(options?.force)
+    if (!hasValidAnalysisContext()) {
+      store.addLog('ℹ️ Analyze or load repository context before fetching issues.', '#f59e0b')
+      return
+    }
     if (store.isIssueStreaming) return
+    if (!force && store.issueNotes) return
 
     store.issueNotes = ''
     store.isIssueStreaming = true
@@ -53,10 +87,16 @@ export function useInsights() {
     }
   }
 
-  function fetchRoadmap() {
-    if (!store.repoUrl.trim() || !store.sessionId) return
+  function fetchRoadmap(options = {}) {
+    const force = Boolean(options?.force)
+    if (!hasValidAnalysisContext()) {
+      store.addLog('ℹ️ Analyze or load repository context before generating roadmap.', '#f59e0b')
+      return
+    }
     if (store.isRoadmapStreaming) return
+    if (!force && store.roadmapContent) return
 
+    resetRoadmapBuffer()
     store.roadmapContent = ''
     store.isRoadmapStreaming = true
     store.activeInsightTab = 'roadmap'
@@ -72,27 +112,34 @@ export function useInsights() {
       const data = JSON.parse(event.data)
 
       if (data.step === 'content_chunk') {
-        store.roadmapContent += data.chunk
+        roadmapChunkBuffer += data.chunk
+        scheduleRoadmapFlush()
       } else if (data.step === 'finish') {
+        flushRoadmapChunks()
         store.addLog(`✅ ${data.message}`, '#15803d')
         roadmapEventSource.close()
         roadmapEventSource = null
         store.isRoadmapStreaming = false
+        resetRoadmapBuffer()
       } else if (data.step === 'error') {
+        flushRoadmapChunks()
         store.addLog(`❌ ${data.message}`, '#b91c1c')
         roadmapEventSource.close()
         roadmapEventSource = null
         store.isRoadmapStreaming = false
+        resetRoadmapBuffer()
       } else if (data.message) {
         store.addLog(`👉 ${data.message}`)
       }
     }
 
     roadmapEventSource.onerror = () => {
+      flushRoadmapChunks()
       store.addLog('❌ Roadmap stream connection lost', '#b91c1c')
       roadmapEventSource.close()
       roadmapEventSource = null
       store.isRoadmapStreaming = false
+      resetRoadmapBuffer()
     }
   }
 
