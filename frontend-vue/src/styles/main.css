@@ -1,20 +1,21 @@
 /* === 全局 CSS 变量 === */
 :root {
-  --primary-color: #2563eb;
-  --bg-color: #f8fafc;
+  --primary-color: #1b7f48;
+  --bg-color: #faf9f6;
+  --shell-bg: #faf9f6;
   --panel-bg: #ffffff;
-  --border-color: #e2e8f0;
-  --text-primary: #334155;
-  --text-secondary: #64748b;
+  --border-color: #e7e5e4;
+  --text-primary: #292524;
+  --text-secondary: #78716c;
   
   --chat-user-bg: #e0f2fe;
   --chat-user-text: #0c4a6e;
   --chat-ai-bg: #ffffff;
   
-  --code-inline-color: #0284c7;
-  --code-inline-bg: #f0f9ff;
-  --code-block-bg: #f1f5f9;
-  --code-block-border: #cbd5e1;
+  --code-inline-color: #166534;
+  --code-inline-bg: #eff6f0;
+  --code-block-bg: #f5f5f4;
+  --code-block-border: #d6d3d1;
 }
 
 /* === 全局重置 === */
@@ -27,7 +28,7 @@ body, html {
   padding: 0;
   height: 100%;
   width: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background-color: var(--bg-color);
   color: var(--text-primary);
   font-size: 16px;

@@ -8,10 +8,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "vue": "^3.4.0",
-    "pinia": "^2.1.0",
+    "dompurify": "^3.3.3",
     "marked": "^11.0.0",
-    "mermaid": "^10.9.0"
+    "mermaid": "^10.9.0",
+    "pdfjs-dist": "^4.8.69",
+    "pinia": "^2.1.0",
+    "vue": "^3.4.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
