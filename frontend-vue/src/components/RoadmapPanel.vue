@@ -2,8 +2,17 @@
   <div class="insight-panel">
     <div class="markdown-body" ref="contentRef">
       <div v-if="!store.roadmapContent && !store.isRoadmapStreaming" class="placeholder">
-        <div class="placeholder-icon">🗺️</div>
-        <div class="placeholder-text">Click the button below to generate a feature roadmap from recent commits.</div>
+        <div class="placeholder-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="5" cy="10" r="1.8" />
+            <circle cx="15" cy="6" r="1.8" />
+            <circle cx="15" cy="14" r="1.8" />
+            <path d="M6.8 10h3.4a2 2 0 0 0 1.41-.59L13.2 7.8" />
+            <path d="M10.2 10a2 2 0 0 1 1.41.59l1.59 1.61" />
+          </svg>
+        </div>
+        <div class="placeholder-title">Commit Roadmap</div>
+        <div class="placeholder-text">AI-generated improvement roadmap will appear here after analysis.</div>
         <button class="fetch-btn" @click="fetchRoadmap" :disabled="!store.sessionId">
           🗺️ Generate Roadmap
         </button>
@@ -258,7 +267,7 @@ async function renderSingleCodeBlock(codeBlock, isFinalRender = false) {
       div.replaceWith(newPre)
     }
   }
-})
+}
 </script>
 
 <style scoped>
@@ -267,9 +276,7 @@ async function renderSingleCodeBlock(codeBlock, isFinalRender = false) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg-color);
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
+  background: #faf9f6;
 }
 
 .markdown-body {
@@ -339,39 +346,66 @@ async function renderSingleCodeBlock(codeBlock, isFinalRender = false) {
 }
 
 .placeholder {
+  height: 100%;
   text-align: center;
-  color: #94a3b8;
-  margin-top: 60px;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  padding: 32px;
+  color: #a8a29e;
 }
 
 .placeholder-icon {
-  font-size: 40px;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  background: #f5f5f4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+  color: #a8a29e;
+}
+
+.placeholder-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.placeholder-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #57534e;
 }
 
 .placeholder-text {
-  font-size: 16px;
+  font-size: 12px;
+  color: #a8a29e;
 }
 
 .fetch-btn {
-  margin-top: 8px;
-  padding: 10px 24px;
-  font-size: 15px;
-  font-weight: 600;
-  color: #fff;
-  background: linear-gradient(135deg, #0ea5e9, #06b6d4);
-  border: none;
+  margin-top: 6px;
+  padding: 7px 12px;
+  font-size: 0;
+  font-weight: 500;
+  color: #57534e;
+  background: #fff;
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.fetch-btn::after {
+  content: "Generate Roadmap";
+  font-size: 12px;
 }
 
 .fetch-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(14, 165, 233, 0.4);
+  background: #f5f5f4;
+  border-color: #d6d3d1;
 }
 
 .fetch-btn:disabled {
@@ -396,7 +430,7 @@ async function renderSingleCodeBlock(codeBlock, isFinalRender = false) {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #0ea5e9;
+  background: #1b7f48;
   animation: pulse 1.2s ease-in-out infinite;
 }
 

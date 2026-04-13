@@ -1,9 +1,6 @@
-<template>
-  <div 
-    class="resizer" 
-    @mousedown="startResize"
-  >
-    <span class="resizer-handle">⋮</span>
+﻿<template>
+  <div class="resizer" @mousedown="startResize">
+    <span class="resizer-handle" aria-hidden="true"></span>
   </div>
 </template>
 
@@ -14,23 +11,23 @@ const emit = defineEmits(['resize'])
 
 let isResizing = false
 
-function startResize() {
+function startResize(event) {
+  event.preventDefault()
   isResizing = true
   document.body.style.cursor = 'col-resize'
   document.body.style.userSelect = 'none'
 }
 
-function onMouseMove(e) {
+function onMouseMove(event) {
   if (!isResizing) return
-  emit('resize', e.clientX)
+  emit('resize', event.clientX)
 }
 
 function onMouseUp() {
-  if (isResizing) {
-    isResizing = false
-    document.body.style.cursor = ''
-    document.body.style.userSelect = ''
-  }
+  if (!isResizing) return
+  isResizing = false
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
 }
 
 onMounted(() => {
@@ -47,7 +44,7 @@ onUnmounted(() => {
 <style scoped>
 .resizer {
   width: 10px;
-  background: #f1f5f9;
+  background: #f5f5f4;
   cursor: col-resize;
   display: flex;
   align-items: center;
@@ -59,12 +56,14 @@ onUnmounted(() => {
 }
 
 .resizer:hover {
-  background: #e2e8f0;
+  background: #ede7e1;
 }
 
 .resizer-handle {
-  color: #94a3b8;
-  font-size: 14px;
+  width: 2px;
+  height: 52px;
+  border-radius: 999px;
+  background: #d6d3d1;
   pointer-events: none;
 }
 </style>

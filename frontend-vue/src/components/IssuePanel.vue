@@ -3,12 +3,13 @@
     <div class="markdown-body" ref="contentRef">
       <div v-if="!store.issueNotes && !store.isIssueStreaming" class="placeholder">
         <div class="placeholder-icon">📋</div>
-        <div class="placeholder-text">Click the button below to fetch and summarize issues.</div>
+        <div class="placeholder-title">Issues Notebook</div>
+        <div class="placeholder-text">Run analysis to surface identified code issues and suggestions.</div>
         <button class="fetch-btn" @click="fetchIssues" :disabled="!store.sessionId">
           📋 Fetch Issues
         </button>
       </div>
-      <div v-else ref="htmlRef"></div>
+      <div v-else v-html="parsedHtml"></div>
     </div>
     <div v-if="store.isIssueStreaming" class="streaming-indicator">
       <span class="dot-pulse"></span> Generating issue summary...
@@ -17,23 +18,15 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick } from 'vue'
+import { computed } from 'vue'
 import { marked } from 'marked'
 import { useAppStore } from '../stores/app'
 import { useInsights } from '../composables/useInsights'
 
 const store = useAppStore()
 const { fetchIssues } = useInsights()
-const contentRef = ref(null)
-const htmlRef = ref(null)
 
-watch(() => store.issueNotes, async (val) => {
-  if (!val) return
-  await nextTick()
-  if (htmlRef.value) {
-    htmlRef.value.innerHTML = marked.parse(val)
-  }
-})
+const parsedHtml = computed(() => store.issueNotes ? marked.parse(store.issueNotes) : '')
 </script>
 
 <style scoped>
@@ -42,9 +35,7 @@ watch(() => store.issueNotes, async (val) => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg-color);
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
+  background: #faf9f6;
 }
 
 .markdown-body {
@@ -57,39 +48,72 @@ watch(() => store.issueNotes, async (val) => {
 }
 
 .placeholder {
+  height: 100%;
   text-align: center;
-  color: #94a3b8;
-  margin-top: 60px;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  padding: 32px;
+  color: #a8a29e;
 }
 
 .placeholder-icon {
-  font-size: 40px;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  background: #f5f5f4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+  color: transparent;
+  font-size: 0;
+}
+
+.placeholder-icon::before {
+  content: "";
+  width: 20px;
+  height: 16px;
+  border: 2px solid #a8a29e;
+  border-top-width: 1px;
+  border-radius: 2px;
+  box-shadow: inset 8px 0 0 #f5f5f4, inset 10px 0 0 #a8a29e;
+}
+
+.placeholder-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #57534e;
 }
 
 .placeholder-text {
-  font-size: 16px;
+  font-size: 12px;
+  color: #a8a29e;
 }
 
 .fetch-btn {
-  margin-top: 8px;
-  padding: 10px 24px;
-  font-size: 15px;
-  font-weight: 600;
-  color: #fff;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  border: none;
+  margin-top: 6px;
+  padding: 7px 12px;
+  font-size: 0;
+  font-weight: 500;
+  color: #57534e;
+  background: #fff;
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.fetch-btn::after {
+  content: "Fetch Issues";
+  font-size: 12px;
 }
 
 .fetch-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+  background: #f5f5f4;
+  border-color: #d6d3d1;
 }
 
 .fetch-btn:disabled {
@@ -114,7 +138,7 @@ watch(() => store.issueNotes, async (val) => {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #6366f1;
+  background: #1b7f48;
   animation: pulse 1.2s ease-in-out infinite;
 }
 

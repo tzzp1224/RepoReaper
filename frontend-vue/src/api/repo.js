@@ -61,3 +61,25 @@ export async function sendChatMessage(query, sessionId, repoUrl, signal) {
     signal
   })
 }
+
+export async function fetchReproScore(sessionId, repoUrl, options = {}) {
+  const response = await fetch(`${API_BASE}/api/repro/score`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: sessionId || undefined,
+      repo_url: repoUrl || undefined,
+      ...options
+    })
+  })
+  return await response.json()
+}
+
+export async function fetchPaperAlign(payload) {
+  const response = await fetch(`${API_BASE}/api/paper/align`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  return await response.json()
+}

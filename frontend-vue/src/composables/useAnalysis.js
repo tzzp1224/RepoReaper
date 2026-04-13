@@ -49,6 +49,7 @@ export function useAnalysis() {
     
     // 清空报告
     store.currentReport = ''
+    store.resetChatMessages()
     
     const actionText = regenerateOnly ? '📝 Generating report (reusing index)' : '🚀 Starting full analysis'
     store.clearLogs()
@@ -65,12 +66,16 @@ export function useAnalysis() {
       regenerateOnly
     )
     
+    let finishHandled = false
+
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data)
       
       if (data.step === 'report_chunk') {
         store.currentReport += data.chunk
       } else if (data.step === 'finish') {
+        if (finishHandled) return
+        finishHandled = true
         store.addLog(`✅ ${data.message}`, '#15803d')
         eventSource.close()
         
@@ -145,12 +150,14 @@ export function useAnalysis() {
         store.addLog(`📦 Loaded ${newLang.toUpperCase()} report`, '#15803d')
       } else if (result.has_index) {
         store.currentReport = ''
+    store.resetChatMessages()
         store.buttonState = BTN_STATE.GENERATE
         store.chatEnabled = false
         store.setHint('langNeedGenerate', 'info')
         store.addLog(`ℹ️ No ${newLang.toUpperCase()} report. Click Generate.`, '#f59e0b')
       } else {
         store.currentReport = ''
+    store.resetChatMessages()
         store.buttonState = BTN_STATE.ANALYZE
         store.chatEnabled = false
         store.setHint('needAnalyze', 'warning')

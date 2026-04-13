@@ -11,7 +11,8 @@
     "vue": "^3.4.0",
     "pinia": "^2.1.0",
     "marked": "^11.0.0",
-    "mermaid": "^10.9.0"
+    "mermaid": "^10.9.0",
+    "pdfjs-dist": "^4.8.69"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",

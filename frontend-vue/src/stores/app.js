@@ -1,6 +1,17 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { checkRepoSession } from '../api/repo'
+import { extractCompiledPaperText, mergePaperHighlight, normalizePaperHighlights } from '../utils/paperHighlights'
+
+const INITIAL_CHAT_MESSAGE = '👋 Hi! Once the analysis is done, ask me anything about the code.'
+
+function createInitialChatMessage() {
+  return {
+    id: `msg-welcome-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    role: 'ai',
+    content: INITIAL_CHAT_MESSAGE
+  }
+}
 
 // 按钮状态枚举
 export const BTN_STATE = {
@@ -36,7 +47,7 @@ export const useAppStore = defineStore('app', () => {
   
   // === 聊天 ===
   const chatMessages = ref([
-    { role: 'ai', content: '👋 Hi! Once the analysis is done, ask me anything about the code.' }
+    createInitialChatMessage()
   ])
   const chatEnabled = ref(false)
   const isChatGenerating = ref(false)
@@ -50,11 +61,28 @@ export const useAppStore = defineStore('app', () => {
   const roadmapContent = ref('')
   const isIssueStreaming = ref(false)
   const isRoadmapStreaming = ref(false)
+
+  const scoreResult = ref(null)
+  const scoreLoading = ref(false)
+  const scoreError = ref('')
+
+  const paperAlignText = ref('')
+  const paperAlignTopK = ref(5)
+  const paperAlignResult = ref(null)
+  const paperAlignLoading = ref(false)
+  const paperAlignError = ref('')
+  const paperUploadedFileName = ref('')
+  const paperHighlightMode = ref(false)
+  const paperHighlights = ref([])
+  const paperPdfFile = ref(null)
+  const paperPdfPages = ref([])
+  const paperSelections = ref([])
+  const paperSelectionMode = ref('text')
   
   // === 计算属性 ===
   const langLabel = computed(() => language.value === 'zh' ? '中文' : 'EN')
   const shortSessionId = computed(() => 
-    sessionId.value ? sessionId.value.slice(-8) : '...'
+    sessionId.value ? sessionId.value.slice(-8) : '........'
   )
   
   const buttonText = computed(() => {
@@ -81,6 +109,13 @@ export const useAppStore = defineStore('app', () => {
       [BTN_STATE.ANALYZING]: 'btn-checking'
     }
     return map[buttonState.value] || 'btn-analyze'
+  })
+
+  const compiledPaperText = computed(() => {
+    if (paperSelectionMode.value === 'pdf' && paperSelections.value.length > 0) {
+      return paperSelections.value.map(s => s.text).join('\n\n')
+    }
+    return extractCompiledPaperText(paperAlignText.value, paperHighlights.value)
   })
 
   // === Actions ===
@@ -110,6 +145,11 @@ export const useAppStore = defineStore('app', () => {
     const msg = chatMessages.value.find(m => m.id === id)
     if (msg) msg.content = content
   }
+
+  function resetChatMessages() {
+    chatMessages.value = [createInitialChatMessage()]
+    isChatGenerating.value = false
+  }
   
   function cacheReport(lang, report) {
     cachedReports.value[lang] = report
@@ -122,6 +162,83 @@ export const useAppStore = defineStore('app', () => {
   function clearCache() {
     cachedReports.value = {}
   }
+
+  function resetScoreState() {
+    scoreResult.value = null
+    scoreLoading.value = false
+    scoreError.value = ''
+  }
+
+  function resetPaperAlignState() {
+    paperAlignText.value = ''
+    paperAlignTopK.value = 5
+    paperAlignResult.value = null
+    paperAlignLoading.value = false
+    paperAlignError.value = ''
+    paperUploadedFileName.value = ''
+    paperHighlightMode.value = false
+    paperHighlights.value = []
+    paperPdfFile.value = null
+    paperPdfPages.value = []
+    paperSelections.value = []
+    paperSelectionMode.value = 'text'
+  }
+
+  function setPaperUploadedFileName(name) {
+    paperUploadedFileName.value = name || ''
+  }
+
+  function setPaperHighlightMode(enabled) {
+    paperHighlightMode.value = Boolean(enabled)
+  }
+
+  function setPaperHighlights(highlights) {
+    paperHighlights.value = normalizePaperHighlights(highlights)
+  }
+
+  function addPaperHighlight(start, end) {
+    paperHighlights.value = mergePaperHighlight(
+      paperHighlights.value,
+      start,
+      end,
+      `hl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    )
+  }
+
+  function removePaperHighlight(id) {
+    paperHighlights.value = paperHighlights.value.filter(item => item.id !== id)
+  }
+
+  function clearPaperHighlights() {
+    paperHighlights.value = []
+  }
+
+  function setPaperPdfFile(file) {
+    paperPdfFile.value = file
+  }
+
+  function setPaperPdfPages(pages) {
+    paperPdfPages.value = pages
+  }
+
+  function addPaperSelection(text, meta = {}) {
+    const cleaned = (text || '').replace(/\s+/g, ' ').trim()
+    if (!cleaned) return
+    if (paperSelections.value.some(item => item.text === cleaned)) return
+    paperSelections.value.push({
+      id: `sel-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      text: cleaned,
+      meta
+    })
+  }
+
+  function removePaperSelection(id) {
+    paperSelections.value = paperSelections.value.filter(item => item.id !== id)
+  }
+
+  function clearPaperSelections() {
+    paperSelections.value = []
+  }
   
   async function checkUrl() {
     if (!repoUrl.value.trim()) {
@@ -133,6 +250,8 @@ export const useAppStore = defineStore('app', () => {
     // URL 变化时清空缓存
     if (repoUrl.value !== currentRepoUrl.value) {
       clearCache()
+      resetScoreState()
+      resetPaperAlignState()
     }
     
     buttonState.value = BTN_STATE.CHECKING
@@ -200,6 +319,21 @@ export const useAppStore = defineStore('app', () => {
     roadmapContent,
     isIssueStreaming,
     isRoadmapStreaming,
+    scoreResult,
+    scoreLoading,
+    scoreError,
+    paperAlignText,
+    paperAlignTopK,
+    paperAlignResult,
+    paperAlignLoading,
+    paperAlignError,
+    paperUploadedFileName,
+    paperHighlightMode,
+    paperHighlights,
+    paperPdfFile,
+    paperPdfPages,
+    paperSelections,
+    paperSelectionMode,
     
     // Computed
     langLabel,
@@ -207,6 +341,7 @@ export const useAppStore = defineStore('app', () => {
     buttonText,
     buttonDisabled,
     buttonClass,
+    compiledPaperText,
     
     // Actions
     addLog,
@@ -215,9 +350,23 @@ export const useAppStore = defineStore('app', () => {
     hideHint,
     addChatMessage,
     updateChatMessage,
+    resetChatMessages,
     cacheReport,
     getCachedReport,
     clearCache,
+    resetScoreState,
+    resetPaperAlignState,
+    setPaperUploadedFileName,
+    setPaperHighlightMode,
+    setPaperHighlights,
+    addPaperHighlight,
+    removePaperHighlight,
+    clearPaperHighlights,
+    setPaperPdfFile,
+    setPaperPdfPages,
+    addPaperSelection,
+    removePaperSelection,
+    clearPaperSelections,
     checkUrl,
     applyCheckResult
   }

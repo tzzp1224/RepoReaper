@@ -3,12 +3,25 @@
     <!-- 报告内容 -->
     <div class="markdown-body" ref="reportRef">
       <div v-if="!store.currentReport" class="placeholder">
+        <div class="placeholder-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 3.5h5.5L15 7v9.5H6z" />
+            <path d="M11.5 3.5V7H15" />
+            <path d="M8 10h5" />
+            <path d="M8 13h5" />
+          </svg>
+        </div>
+        <div class="placeholder-title">Project Analysis Report</div>
+        <div class="placeholder-text">The project architecture report will be generated here.</div>
         📊 The project architecture report will be generated here.
       </div>
       <!-- 报告内容容器，由 JS 手动管理 innerHTML -->
-      <div v-else ref="reportContentRef"></div>
+      <div v-show="store.currentReport" ref="reportContentRef"></div>
     </div>
     
+    <div v-if="store.isStreaming" class="streaming-indicator">
+      <span class="dot-pulse"></span> Generating project analysis report...
+    </div>
     <!-- 悬浮工具栏 -->
     <div v-if="store.currentReport" class="floating-toolbar">
       <button class="toolbar-btn" @click="downloadMarkdown" title="Download as Markdown">
@@ -153,7 +166,6 @@ watch(() => store.currentReport, async (newVal, oldVal) => {
     console.log('[Mermaid] New report started, cache cleared')
   }
   
-  // 等待 Vue 渲染 v-else 分支后再更新内容
   await nextTick()
   
   // 更新报告内容（会同步恢复已缓存的 mermaid）
@@ -409,63 +421,95 @@ ${processedHtml}
   flex-direction: column;
   overflow: hidden;
   position: relative;
-  background: var(--bg-color);
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
+  background: transparent;
+  border-radius: 0;
+  border: 0;
 }
 
 .floating-toolbar {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 10px;
+  right: 16px;
   display: flex;
   gap: 6px;
   z-index: 10;
-  opacity: 0.7;
+  opacity: 1;
   transition: opacity 0.2s;
 }
 
-.report-container:hover .floating-toolbar {
-  opacity: 1;
-}
-
 .toolbar-btn {
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  font-size: 16px;
-  background: rgba(255, 255, 255, 0.9);
-  color: #334155;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
+  min-width: 42px;
+  height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #44403c;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
 
 .toolbar-btn:hover {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-  transform: scale(1.05);
+  background: #f5f5f4;
+  border-color: #d6d3d1;
 }
 
 .markdown-body {
   flex: 1;
-  padding: 20px 24px;
+  padding: 18px 24px 28px;
   overflow-y: auto;
   font-size: 15px;
   line-height: 1.7;
   color: var(--text-primary);
+  background: #faf9f6;
 }
 
 .placeholder {
+  height: 100%;
   text-align: center;
-  color: #94a3b8;
-  margin-top: 80px;
-  font-size: 18px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  padding: 32px;
+  color: #a8a29e;
+  font-size: 0;
+}
+
+.placeholder-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  background: #f5f5f4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+  color: #a8a29e;
+}
+
+.placeholder-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.placeholder-title {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: #57534e;
+}
+
+.placeholder-text {
+  font-size: 12px;
+  line-height: 1.4;
+  color: #a8a29e;
 }
 
 /* Mermaid 样式 */
@@ -542,11 +586,37 @@ ${processedHtml}
 .markdown-body :deep(.mermaid-loading) {
   color: #0369a1;
   font-size: 14px;
-  animation: pulse 1.5s ease-in-out infinite;
+  animation: mermaidPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes mermaidPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.streaming-indicator {
+  padding: 8px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.dot-pulse {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #1b7f48;
+  animation: pulse 1.2s ease-in-out infinite;
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
 }
 </style>
