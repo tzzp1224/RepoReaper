@@ -49,12 +49,7 @@
           </div>
         </section>
 
-        <section class="score-card">
-          <h3>Evidence References</h3>
-          <div class="chip-row">
-            <span v-for="reference in store.scoreResult.evidence_refs || []" :key="reference" class="chip">{{ reference }}</span>
-          </div>
-        </section>
+
       </template>
     </div>
 

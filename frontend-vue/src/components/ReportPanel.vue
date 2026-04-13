@@ -59,9 +59,17 @@ const RENDER_THROTTLE_MS = 400  // 节流间隔（最少间隔多久渲染一次
 // 存储已渲染的代码块 - key 是代码内容，value 是 { html: string, isError: boolean }
 const renderedMermaidCache = new Map()
 
-// 初始化 Mermaid
+// 初始化 Mermaid，并在挂载时恢复已有报告内容（如从 PaperAlign 返回后重新挂载）
 onMounted(() => {
   initializeMermaid()
+  if (store.currentReport) {
+    nextTick(() => {
+      updateReportContent(store.currentReport)
+      if (store.currentReport.includes('```mermaid')) {
+        setTimeout(() => renderAllCompleteMermaidBlocks(true), 150)
+      }
+    })
+  }
 })
 
 // 清理定时器

@@ -17,7 +17,7 @@
           🗺️ Generate Roadmap
         </button>
       </div>
-      <div v-else ref="htmlRef"></div>
+      <div v-show="store.roadmapContent || store.isRoadmapStreaming" ref="htmlRef"></div>
     </div>
     <div v-if="store.isRoadmapStreaming" class="streaming-indicator">
       <span class="dot-pulse"></span> Generating commit roadmap...
@@ -50,8 +50,17 @@ const isRendering = ref(false)
 let lastRenderTime = 0
 const renderedMermaidCache = new Map()
 
+// 初始化 Mermaid，并在挂载时恢复已有内容（如从 PaperAlign 返回后重新挂载）
 onMounted(() => {
   initializeMermaid()
+  if (store.roadmapContent && !store.isRoadmapStreaming) {
+    nextTick(() => {
+      updateHtml(store.roadmapContent)
+      if (store.roadmapContent.includes('```mermaid')) {
+        setTimeout(() => renderAllCompleteMermaidBlocks(true), 150)
+      }
+    })
+  }
 })
 
 onUnmounted(() => {
