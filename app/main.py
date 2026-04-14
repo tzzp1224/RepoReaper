@@ -295,6 +295,67 @@ async def repro_score(request: Request):
         return _unified_error("INTERNAL", str(e), status_code=500)
 
 
+@app.post("/api/repo/readme-papers")
+async def readme_papers(request: Request):
+    """Extract paper PDF URLs from the target repository's README."""
+    from app.services.github_service import extract_paper_urls_from_readme
+
+    try:
+        data = await _parse_json_body(request)
+    except ValueError as e:
+        return _unified_error("INVALID_ARGUMENT", str(e))
+
+    repo_url = (data.get("repo_url") or data.get("url") or "").strip()
+    if not repo_url:
+        return _unified_error("INVALID_ARGUMENT", "repo_url is required")
+
+    try:
+        papers = await extract_paper_urls_from_readme(repo_url)
+        return _unified_success({"papers": papers})
+    except Exception as e:
+        logger.exception("readme_papers failed")
+        return _unified_error("INTERNAL", str(e), status_code=500)
+
+
+@app.get("/api/paper/proxy-pdf")
+async def proxy_paper_pdf(url: str):
+    """Proxy an external PDF to bypass browser CORS restrictions."""
+    import httpx
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    allowed_hosts = {"arxiv.org", "openreview.net", "proceedings.mlr.press",
+                     "papers.nips.cc", "proceedings.neurips.cc", "aclanthology.org",
+                     "www.ijcai.org", "aaai.org", "dl.acm.org", "ieee.org",
+                     "ieeexplore.ieee.org", "link.springer.com"}
+    if not parsed.scheme.startswith("http"):
+        return _unified_error("INVALID_ARGUMENT", "Only HTTP(S) URLs are allowed")
+    if not any(parsed.netloc == h or parsed.netloc.endswith("." + h) for h in allowed_hosts):
+        return _unified_error("INVALID_ARGUMENT",
+                              f"Domain '{parsed.netloc}' is not in the allow-list for PDF proxy")
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (RepoReaper)"})
+            resp.raise_for_status()
+
+        content_type = resp.headers.get("content-type", "application/pdf")
+        return StreamingResponse(
+            iter([resp.content]),
+            media_type=content_type,
+            headers={
+                "Content-Disposition": "inline; filename=paper.pdf",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+    except httpx.HTTPStatusError as e:
+        return _unified_error("UPSTREAM_UNAVAILABLE",
+                              f"Remote server returned {e.response.status_code}", status_code=502)
+    except Exception as e:
+        logger.exception("proxy_paper_pdf failed")
+        return _unified_error("INTERNAL", str(e), status_code=500)
+
+
 @app.post("/api/paper/align")
 async def paper_align(request: Request, stream: bool = False):
     """§3.3 论文-代码对齐"""
