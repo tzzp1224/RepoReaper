@@ -115,3 +115,13 @@ docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d -
 兼容性提示：
 - 推荐 Python `3.10-3.12`。
 - Python `3.14` 当前有已知兼容风险（Langfuse SDK 与部分 legacy asyncio 测试模式）。
+
+## Star History
+
+<a href="https://star-history.com/#tzzp1224/RepoReaper&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date" />
+ </picture>
+</a>
