@@ -9,7 +9,9 @@ GitHub 服务层
 """
 
 import logging
+import re
 from typing import List, Optional, Dict
+from urllib.parse import urlparse
 
 from app.utils.github_client import (
     GitHubClient,
@@ -180,6 +182,37 @@ class GitHubService:
         repo = await self._get_repo_from_url(repo_url)
         return await self.client.get_repo_commits(repo, per_page, max_pages)
 
+    async def extract_paper_urls_from_readme(self, repo_url: str) -> List[Dict[str, str]]:
+        """
+        Fetch the repo README and extract paper-related PDF/abstract URLs.
+
+        Returns a list of dicts: [{"url": "...", "title": "...", "source": "arxiv|openreview|pdf|..."}]
+        """
+        repo = await self._get_repo_from_url(repo_url)
+
+        readme_path = None
+        try:
+            files = await self.client.get_repo_tree(repo)
+            for f in files:
+                if f.path.lower() in ("readme.md", "readme.rst", "readme.txt", "readme"):
+                    readme_path = f.path
+                    break
+        except Exception:
+            readme_path = "README.md"
+
+        if not readme_path:
+            readme_path = "README.md"
+
+        try:
+            content = await self.client.get_file_content(repo, readme_path)
+        except Exception:
+            return []
+
+        if not content:
+            return []
+
+        return _extract_paper_links(content)
+
 
 # ============================================================
 # 全局服务实例
@@ -255,6 +288,67 @@ async def get_repo_commits(
     return await service.get_repo_commits(repo_url, per_page, max_pages)
 
 
+async def extract_paper_urls_from_readme(repo_url: str) -> List[Dict[str, str]]:
+    """Extract paper PDF/abstract URLs from a repo's README."""
+    service = get_github_service()
+    return await service.extract_paper_urls_from_readme(repo_url)
+
+
+# ============================================================
+# README paper-link extraction helpers
+# ============================================================
+
+_ARXIV_ABS_RE = re.compile(r'https?://arxiv\.org/abs/[\w.]+', re.IGNORECASE)
+_ARXIV_PDF_RE = re.compile(r'https?://arxiv\.org/pdf/[\w.]+(?:\.pdf)?', re.IGNORECASE)
+_OPENREVIEW_RE = re.compile(r'https?://openreview\.net/(?:forum|pdf)\?id=[\w-]+', re.IGNORECASE)
+_GENERIC_PDF_RE = re.compile(r'https?://[^\s)>\]"\']+\.pdf(?:\?[^\s)>\]"\']*)?', re.IGNORECASE)
+
+_MD_LINK_RE = re.compile(r'\[([^\]]*)\]\((https?://[^\s)]+)\)')
+
+
+def _extract_paper_links(readme_text: str) -> List[Dict[str, str]]:
+    """Parse README markdown and return deduplicated paper links."""
+    seen_urls: set = set()
+    results: List[Dict[str, str]] = []
+
+    md_links = {url: title for title, url in _MD_LINK_RE.findall(readme_text)}
+
+    def _add(url: str, source: str, fallback_title: str = ""):
+        canon = url.rstrip("/")
+        if canon in seen_urls:
+            return
+        seen_urls.add(canon)
+        title = md_links.get(url, "") or fallback_title or source
+        results.append({"url": canon, "title": title.strip(), "source": source})
+
+    for m in _ARXIV_PDF_RE.finditer(readme_text):
+        url = m.group(0)
+        if not url.endswith(".pdf"):
+            url += ".pdf"
+        _add(url, "arxiv", "arXiv PDF")
+
+    for m in _ARXIV_ABS_RE.finditer(readme_text):
+        abs_url = m.group(0)
+        pdf_url = abs_url.replace("/abs/", "/pdf/")
+        if not pdf_url.endswith(".pdf"):
+            pdf_url += ".pdf"
+        _add(pdf_url, "arxiv", "arXiv PDF")
+
+    for m in _OPENREVIEW_RE.finditer(readme_text):
+        url = m.group(0)
+        pdf_url = url.replace("forum?", "pdf?") if "forum?" in url else url
+        _add(pdf_url, "openreview", "OpenReview PDF")
+
+    for m in _GENERIC_PDF_RE.finditer(readme_text):
+        url = m.group(0)
+        parsed = urlparse(url)
+        if "arxiv.org" in parsed.netloc or "openreview.net" in parsed.netloc:
+            continue
+        _add(url, "pdf", "Paper PDF")
+
+    return results
+
+
 # 导出
 __all__ = [
     "GitHubService",
@@ -263,6 +357,7 @@ __all__ = [
     "get_file_content",
     "get_repo_issues",
     "get_repo_commits",
+    "extract_paper_urls_from_readme",
     "parse_repo_url_compat",
     "GitHubError",
     "GitHubNotFoundError",

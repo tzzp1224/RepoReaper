@@ -13,25 +13,17 @@
       </div>
     </div>
 
-    <div class="session-pill">
-      <span class="session-dot"></span>
-      <span class="session-label">Session</span>
-      <span class="session-value">{{ store.shortSessionId }}</span>
-    </div>
+    <span class="course-badge">NUS CS5260 Project (Spring 2026)</span>
   </header>
 </template>
 
 <script setup>
-import { useAppStore } from '../stores/app'
-
 defineProps({
   view: {
     type: String,
     default: 'main'
   }
 })
-
-const store = useAppStore()
 </script>
 
 <style scoped>
@@ -99,32 +91,15 @@ const store = useAppStore()
   font-weight: 600;
 }
 
-.session-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border: 1px solid var(--border-color);
-  background: #f5f5f4;
+.course-badge {
+  padding: 5px 12px;
+  border: 1px solid #c7d2fe;
+  background: #eef2ff;
+  color: #4338ca;
   border-radius: 8px;
-  flex-shrink: 0;
   font-size: 12px;
-}
-
-.session-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: #10b981;
-}
-
-.session-label {
-  color: #78716c;
-}
-
-.session-value {
-  color: #292524;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-weight: 600;
+  white-space: nowrap;
 }
+
 </style>
