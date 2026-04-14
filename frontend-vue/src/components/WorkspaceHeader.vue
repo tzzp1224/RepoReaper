@@ -13,10 +13,13 @@
       </div>
     </div>
 
-    <div class="session-pill">
-      <span class="session-dot"></span>
-      <span class="session-label">Session</span>
-      <span class="session-value">{{ store.shortSessionId }}</span>
+    <div class="header-right">
+      <span class="course-badge">NUS CS5260 Project (Spring 2026)</span>
+      <div class="session-pill">
+        <span class="session-dot"></span>
+        <span class="session-label">Session</span>
+        <span class="session-value">{{ store.shortSessionId }}</span>
+      </div>
     </div>
   </header>
 </template>
@@ -97,6 +100,24 @@ const store = useAppStore()
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.course-badge {
+  padding: 5px 12px;
+  border: 1px solid #c7d2fe;
+  background: #eef2ff;
+  color: #4338ca;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .session-pill {

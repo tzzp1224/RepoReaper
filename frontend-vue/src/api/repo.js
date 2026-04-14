@@ -89,6 +89,24 @@ export async function fetchArtifactSnapshot(sessionId, repoUrl, artifact, langua
   return await response.json()
 }
 
+export async function fetchReadmePapers(repoUrl) {
+  try {
+    const response = await fetch(`${API_BASE}/api/repo/readme-papers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo_url: repoUrl })
+    })
+    const result = await response.json()
+    if (result?.status === 'success' && Array.isArray(result?.data?.papers)) {
+      return result.data.papers
+    }
+    return []
+  } catch (e) {
+    console.error('Fetch readme papers failed:', e)
+    return []
+  }
+}
+
 export async function fetchPaperAlign(payload, signal) {
   return fetch(`${API_BASE}/api/paper/align`, {
     method: 'POST',

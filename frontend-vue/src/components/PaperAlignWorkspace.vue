@@ -69,6 +69,30 @@
           </div>
         </div>
 
+        <div v-if="detectedPapers.length && !store.paperPdfFile" class="detected-papers-banner">
+          <div class="detected-papers-header">
+            <svg class="detected-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="10" cy="10" r="7.5" />
+              <path d="M10 7v3" /><circle cx="10" cy="13" r="0.5" fill="currentColor" />
+            </svg>
+            <span>Paper{{ detectedPapers.length > 1 ? 's' : '' }} detected from README</span>
+          </div>
+          <div class="detected-papers-list">
+            <div v-for="paper in detectedPapers" :key="paper.url" class="detected-paper-item">
+              <span class="detected-paper-source">{{ paper.source }}</span>
+              <span class="detected-paper-title" :title="paper.url">{{ paper.title || paper.url }}</span>
+              <button
+                type="button"
+                class="load-paper-btn"
+                :disabled="!!loadingPaperUrl"
+                @click="loadPaperFromUrl(paper)"
+              >
+                {{ loadingPaperUrl === paper.url ? 'Loading...' : 'Load PDF' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div class="paper-editor">
           <template v-if="inputMode === 'text'">
             <textarea
@@ -298,6 +322,7 @@ import PdfDocumentViewer from './PdfDocumentViewer.vue'
 import { useAppStore } from '../stores/app'
 import { usePaperAlign } from '../composables/usePaperAlign'
 import { buildPaperHighlightSegments, getTextNodeOffset } from '../utils/paperHighlights'
+import { fetchReadmePapers } from '../api/repo'
 
 defineEmits(['back'])
 
@@ -312,6 +337,47 @@ const diagnosticsOpen = ref(true)
 const uploadingFile = ref(false)
 const fileError = ref('')
 const inputMode = ref('text')  // 'text' | 'pdf'
+
+const detectedPapers = ref([])
+const detectingPapers = ref(false)
+const loadingPaperUrl = ref('')
+
+async function detectPapersFromReadme() {
+  if (!store.repoUrl) return
+  detectingPapers.value = true
+  try {
+    detectedPapers.value = await fetchReadmePapers(store.repoUrl)
+  } catch (_) {
+    detectedPapers.value = []
+  } finally {
+    detectingPapers.value = false
+  }
+}
+
+async function loadPaperFromUrl(paper) {
+  loadingPaperUrl.value = paper.url
+  fileError.value = ''
+  try {
+    const proxyUrl = `/api/paper/proxy-pdf?url=${encodeURIComponent(paper.url)}`
+    const resp = await fetch(proxyUrl)
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const blob = await resp.blob()
+    const fileName = paper.title || paper.url.split('/').pop() || 'paper.pdf'
+    const file = new File([blob], fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`, { type: 'application/pdf' })
+    store.setPaperPdfFile(file)
+    store.paperSelectionMode = 'pdf'
+    store.clearPaperSelections()
+    store.paperAlignText = ''
+    store.clearPaperHighlights()
+    store.setPaperHighlightMode(false)
+    store.setPaperUploadedFileName(file.name)
+    inputMode.value = 'pdf'
+  } catch (err) {
+    fileError.value = `Failed to load paper: ${err?.message || 'network error'}`
+  } finally {
+    loadingPaperUrl.value = ''
+  }
+}
 
 const RESIZER_WIDTH = 10
 const LEFT_MIN = 380
@@ -538,6 +604,7 @@ onMounted(() => {
   }
   syncPaperPaneWidth()
   window.addEventListener('resize', syncPaperPaneWidth)
+  detectPapersFromReadme()
 })
 
 onUnmounted(() => {
@@ -1203,6 +1270,87 @@ blockquote {
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+.detected-papers-banner {
+  flex-shrink: 0;
+  border-bottom: 1px solid #bfdbfe;
+  background: #eff6ff;
+  padding: 10px 16px;
+}
+
+.detected-papers-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1d4ed8;
+  margin-bottom: 8px;
+}
+
+.detected-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.detected-papers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detected-paper-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.detected-paper-source {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #dbeafe;
+  color: #1e40af;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.detected-paper-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1e3a5f;
+}
+
+.load-paper-btn {
+  flex-shrink: 0;
+  border: 1px solid #93c5fd;
+  background: #dbeafe;
+  color: #1d4ed8;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.load-paper-btn:hover:not(:disabled) {
+  background: #bfdbfe;
+}
+
+.load-paper-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .pdf-mode-shell {
