@@ -118,10 +118,18 @@ Return VALID JSON ONLY (no markdown fences):
 }}
 
 Rules:
-- Questions must be concise and actionable.
-- Questions must be tightly grounded in the repository context below.
-- Do not output generic placeholders.
-- Do not output explanations.
+- Output exactly one question string for each key.
+- Keep each question concise and actionable.
+- Every question MUST contain at least one concrete repository anchor from context:
+  file path (e.g. app/services/chunking_service.py), function/class/symbol name,
+  API/route name, config key, or executable command.
+- Do NOT output generic questions with no anchor (forbidden examples:
+  "How can this project be improved?" / "What should we optimize?").
+- The second question (implementation) MUST explicitly focus on one of:
+  algorithm choice, data structure, key branch conditions, or time/space complexity.
+- The third question (reproduction) MUST be executable-minded and include at least one
+  runnable clue, such as a concrete command, entry file, or minimum verification step.
+- Do not output explanations or extra keys.
 
 ## Repository URL
 {repo_url}
