@@ -184,6 +184,13 @@ LLM_RESPONSES_QUEUE = [
 ]
 
 
+async def _collect_stream_events(stream):
+    events = []
+    async for event in stream:
+        events.append(event)
+    return events
+
+
 # ============================================================
 # Mock 对象
 # ============================================================
@@ -610,6 +617,28 @@ class TestComputePaperAlignment:
             )
         )
         assert result is not None
+
+    def test_stream_reports_input_and_effective_chars(self):
+        from app.services.paper_align_service import compute_paper_alignment_stream
+
+        source_text = "a" * 7000
+        events = asyncio.get_event_loop().run_until_complete(
+            _collect_stream_events(
+                compute_paper_alignment_stream(
+                    paper_text=source_text,
+                    session_id="test_session",
+                    top_k=5,
+                )
+            )
+        )
+
+        init_event = next(
+            event for event in events
+            if event.get("type") == "stage" and event.get("stage") == "init"
+        )
+        assert init_event["input_chars"] == 7000
+        assert init_event["effective_chars"] == 6000
+        assert any(event.get("type") == "final" for event in events)
 
 
 # ============================================================

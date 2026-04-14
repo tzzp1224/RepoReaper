@@ -89,13 +89,13 @@ export async function fetchArtifactSnapshot(sessionId, repoUrl, artifact, langua
   return await response.json()
 }
 
-export async function fetchPaperAlign(payload) {
-  const response = await fetch(`${API_BASE}/api/paper/align`, {
+export async function fetchPaperAlign(payload, signal) {
+  return fetch(`${API_BASE}/api/paper/align`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal
   })
-  return await response.json()
 }
 
 export async function streamPaperAlign(payload, signal) {

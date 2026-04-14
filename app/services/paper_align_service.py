@@ -33,6 +33,7 @@ from app.utils.session import generate_repo_session_id
 logger = logging.getLogger(__name__)
 
 EventCallback = Optional[Callable[[Dict[str, Any]], Awaitable[None]]]
+MAX_PAPER_TEXT_CHARS = 6000
 
 
 def _now_iso() -> str:
@@ -561,7 +562,12 @@ async def _compute_paper_alignment_internal(
     top_k: int = 5,
     event_cb: EventCallback = None,
 ) -> PaperAlignResult:
-    if not paper_text or not paper_text.strip():
+    raw_paper_text = str(paper_text or "")
+    input_chars = len(raw_paper_text)
+    paper_text = raw_paper_text.strip()[:MAX_PAPER_TEXT_CHARS]
+    effective_chars = len(paper_text)
+
+    if not paper_text:
         raise ValueError("paper_text is required")
 
     top_k = max(1, min(int(top_k), 10))
@@ -575,8 +581,13 @@ async def _compute_paper_alignment_internal(
     await _emit(event_cb, {
         "type": "stage",
         "stage": "init",
-        "message": f"Session resolved ({sid}), Top-K={top_k}",
+        "message": (
+            f"Session resolved ({sid}), Top-K={top_k}, "
+            f"paper_text={effective_chars}/{input_chars} chars"
+        ),
         "top_k": top_k,
+        "input_chars": input_chars,
+        "effective_chars": effective_chars,
     })
 
     claims = await _extract_claims(paper_text)

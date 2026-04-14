@@ -3,6 +3,7 @@ import sys
 import io
 import os
 import asyncio
+import json
 from contextlib import asynccontextmanager
 
 # 强制 stdout 使用 utf-8，防止 Windows 控制台乱码
@@ -307,6 +308,8 @@ async def paper_align(request: Request, stream: bool = False):
         return _unified_error("INVALID_ARGUMENT", str(e))
 
     paper_text = data.get("paper_text", "")
+    if not isinstance(paper_text, str):
+        paper_text = str(paper_text or "")
     session_id = data.get("session_id")
     repo_url = data.get("repo_url") or data.get("url")
     top_k = data.get("top_k", 5)
@@ -327,9 +330,21 @@ async def paper_align(request: Request, stream: bool = False):
                     repo_url=repo_url,
                     top_k=top_k,
                 ):
-                    yield json.dumps(event, ensure_ascii=False) + "\n"
+                    try:
+                        yield json.dumps(event, ensure_ascii=False, allow_nan=False) + "\n"
+                    except Exception:
+                        logger.exception("paper_align stream event serialization failed")
+                        fallback_event = {
+                            "type": "error",
+                            "message": "paper alignment stream serialization failed",
+                        }
+                        try:
+                            yield json.dumps(fallback_event, ensure_ascii=False, allow_nan=False) + "\n"
+                        except Exception:
+                            yield '{"type":"error","message":"paper alignment stream serialization failed"}\n'
+                        break
 
-            return StreamingResponse(_stream_events(), media_type="text/plain")
+            return StreamingResponse(_stream_events(), media_type="application/x-ndjson")
 
         result = await compute_paper_alignment(
             paper_text=paper_text,
