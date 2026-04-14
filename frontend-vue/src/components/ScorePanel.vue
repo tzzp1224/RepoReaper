@@ -81,7 +81,7 @@
 </template>
 
 <script setup>
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app'
 import { useScore } from '../composables/useScore'
 
@@ -94,6 +94,7 @@ const props = defineProps({
 
 const store = useAppStore()
 const { loadScore } = useScore()
+const lastLoadKey = ref('')
 
 const dimensions = computed(() => {
   const source = store.scoreResult?.dimension_scores || {}
@@ -105,16 +106,17 @@ const dimensions = computed(() => {
   ]
 })
 
-watch(() => props.active, value => {
-  if (
-    value &&
-    !store.scoreLoading &&
-    !store.scoreResult &&
-    store.canUseAnalyzedContext
-  ) {
+watch(
+  () => [props.active, store.language, store.sessionId, store.repoUrl, store.canUseAnalyzedContext],
+  ([active, language, sessionId, repoUrl, canUse]) => {
+    if (!active || !canUse || !sessionId || !repoUrl || store.scoreLoading) return
+    const loadKey = `${sessionId}:${repoUrl}:${language}`
+    if (lastLoadKey.value === loadKey && store.scoreResult?.language === language) return
+    lastLoadKey.value = loadKey
     loadScore()
-  }
-}, { immediate: true })
+  },
+  { immediate: true }
+)
 </script>
 
 <style scoped>

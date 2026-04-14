@@ -37,16 +37,18 @@ export function createAnalysisStream(url, sessionId, language, regenerateOnly) {
 /**
  * 创建 Issue 摘要 SSE 连接
  */
-export function createIssueStream(url, sessionId, language) {
-  const params = new URLSearchParams({ url, session_id: sessionId, language })
+export function createIssueStream(url, sessionId, language, force = false) {
+  const params = new URLSearchParams({ url, language, force: String(Boolean(force)) })
+  if (sessionId) params.set('session_id', sessionId)
   return new EventSource(`${API_BASE}/api/insights/issues?${params}`)
 }
 
 /**
  * 创建 Commit Roadmap SSE 连接
  */
-export function createRoadmapStream(url, sessionId, language) {
-  const params = new URLSearchParams({ url, session_id: sessionId, language })
+export function createRoadmapStream(url, sessionId, language, force = false) {
+  const params = new URLSearchParams({ url, language, force: String(Boolean(force)) })
+  if (sessionId) params.set('session_id', sessionId)
   return new EventSource(`${API_BASE}/api/insights/commits?${params}`)
 }
 
@@ -72,6 +74,18 @@ export async function fetchReproScore(sessionId, repoUrl, options = {}) {
       ...options
     })
   })
+  return await response.json()
+}
+
+export async function fetchArtifactSnapshot(sessionId, repoUrl, artifact, language = 'en') {
+  const params = new URLSearchParams({
+    artifact,
+    language
+  })
+  if (sessionId) params.set('session_id', sessionId)
+  if (repoUrl) params.set('repo_url', repoUrl)
+
+  const response = await fetch(`${API_BASE}/api/repo/artifacts?${params}`)
   return await response.json()
 }
 

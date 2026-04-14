@@ -1,6 +1,6 @@
 <template>
   <div class="insight-panel">
-    <div class="panel-toolbar">
+    <div v-if="store.roadmapContent" class="panel-toolbar">
       <button class="refresh-btn" :disabled="!canRefresh" @click="refreshRoadmap">
         Refresh
       </button>
@@ -17,9 +17,9 @@
           </svg>
         </div>
         <div class="placeholder-title">Commit Roadmap</div>
-        <div class="placeholder-text">AI-generated improvement roadmap will appear here after analysis.</div>
-        <button class="fetch-btn" @click="refreshRoadmap" :disabled="!canRefresh">
-          🗺️ Generate Roadmap
+        <div class="placeholder-text">Commit roadmap will be generated here.</div>
+        <button class="fetch-btn" @click="generateRoadmap" :disabled="!canRefresh">
+          Generate Roadmap
         </button>
       </div>
       <div v-show="store.roadmapContent || store.isRoadmapStreaming" ref="htmlRef"></div>
@@ -44,11 +44,11 @@ import {
 } from '../composables/useMermaidShared'
 
 const store = useAppStore()
-const { fetchRoadmap } = useInsights()
+const { fetchRoadmap, loadRoadmapSnapshot } = useInsights()
 const contentRef = ref(null)
 const htmlRef = ref(null)
 const emit = defineEmits(['openModal'])
-const canRefresh = computed(() => store.canUseAnalyzedContext && !store.isRoadmapStreaming)
+const canRefresh = computed(() => Boolean(store.repoUrl.trim()) && !store.isRoadmapStreaming)
 
 const RENDER_THROTTLE_MS = 400
 const MARKDOWN_RENDER_THROTTLE_MS = 120
@@ -60,6 +60,10 @@ let lastRenderTime = 0
 const renderedMermaidCache = new Map()
 
 function refreshRoadmap() {
+  fetchRoadmap({ force: true })
+}
+
+function generateRoadmap() {
   fetchRoadmap({ force: true })
 }
 
@@ -75,6 +79,16 @@ onMounted(() => {
     })
   }
 })
+
+watch(
+  () => [store.sessionId, store.language],
+  () => {
+    if (store.isRoadmapStreaming) return
+    if (!store.repoUrl.trim()) return
+    loadRoadmapSnapshot()
+  },
+  { immediate: true }
+)
 
 onUnmounted(() => {
   clearMermaidRenderTimeout()

@@ -1,5 +1,5 @@
 import { useAppStore } from '../stores/app'
-import { createIssueStream, createRoadmapStream } from '../api/repo'
+import { createIssueStream, createRoadmapStream, fetchArtifactSnapshot } from '../api/repo'
 
 /**
  * Insights 逻辑组合式函数 — Issue 摘要 & Commit Roadmap
@@ -35,14 +35,62 @@ export function useInsights() {
     roadmapChunkBuffer = ''
   }
 
-  function hasValidAnalysisContext() {
-    return store.canUseAnalyzedContext
+  async function loadIssuesSnapshot() {
+    if (!store.repoUrl.trim()) {
+      store.issueNotes = ''
+      return null
+    }
+    try {
+      const response = await fetchArtifactSnapshot(
+        store.sessionId,
+        store.repoUrl,
+        'issues',
+        store.language
+      )
+      const data = response?.data || {}
+      if (response?.status === 'success' && data.exists && data.data?.content) {
+        store.issueNotes = data.data.content
+        return data.data.content
+      }
+      store.issueNotes = ''
+      return null
+    } catch (e) {
+      console.error('loadIssuesSnapshot failed:', e)
+      store.issueNotes = ''
+      return null
+    }
+  }
+
+  async function loadRoadmapSnapshot() {
+    if (!store.repoUrl.trim()) {
+      store.roadmapContent = ''
+      return null
+    }
+    try {
+      const response = await fetchArtifactSnapshot(
+        store.sessionId,
+        store.repoUrl,
+        'roadmap',
+        store.language
+      )
+      const data = response?.data || {}
+      if (response?.status === 'success' && data.exists && data.data?.content) {
+        store.roadmapContent = data.data.content
+        return data.data.content
+      }
+      store.roadmapContent = ''
+      return null
+    } catch (e) {
+      console.error('loadRoadmapSnapshot failed:', e)
+      store.roadmapContent = ''
+      return null
+    }
   }
 
   function fetchIssues(options = {}) {
     const force = Boolean(options?.force)
-    if (!hasValidAnalysisContext()) {
-      store.addLog('ℹ️ Analyze or load repository context before fetching issues.', '#f59e0b')
+    if (!store.repoUrl.trim()) {
+      store.addLog('ℹ️ Enter a repository URL before fetching issues.', '#f59e0b')
       return
     }
     if (store.isIssueStreaming) return
@@ -56,7 +104,8 @@ export function useInsights() {
     issueEventSource = createIssueStream(
       store.repoUrl,
       store.sessionId,
-      store.language
+      store.language,
+      force
     )
 
     issueEventSource.onmessage = (event) => {
@@ -89,8 +138,8 @@ export function useInsights() {
 
   function fetchRoadmap(options = {}) {
     const force = Boolean(options?.force)
-    if (!hasValidAnalysisContext()) {
-      store.addLog('ℹ️ Analyze or load repository context before generating roadmap.', '#f59e0b')
+    if (!store.repoUrl.trim()) {
+      store.addLog('ℹ️ Enter a repository URL before generating roadmap.', '#f59e0b')
       return
     }
     if (store.isRoadmapStreaming) return
@@ -105,7 +154,8 @@ export function useInsights() {
     roadmapEventSource = createRoadmapStream(
       store.repoUrl,
       store.sessionId,
-      store.language
+      store.language,
+      force
     )
 
     roadmapEventSource.onmessage = (event) => {
@@ -144,6 +194,8 @@ export function useInsights() {
   }
 
   return {
+    loadIssuesSnapshot,
+    loadRoadmapSnapshot,
     fetchIssues,
     fetchRoadmap
   }

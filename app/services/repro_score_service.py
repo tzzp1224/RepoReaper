@@ -124,18 +124,30 @@ def _adjust_scores_for_insight(dim: DimensionScores, insight: Dict[str, Any]) ->
     )
 
 
-def _risks_from_insight(insight: Dict[str, Any], max_items: int = 8) -> List[ScoreRisk]:
+def _risks_from_insight(
+    insight: Dict[str, Any],
+    language: str,
+    max_items: int = 8,
+) -> List[ScoreRisk]:
     out: List[ScoreRisk] = []
+    is_zh = language == "zh"
     for it in (insight.get("issue_risks") or [])[:max_items]:
         if not isinstance(it, dict):
             continue
         iid = it.get("id")
         url = it.get("url") or ""
         ref = f"issue#{iid}" if iid is not None else url
+        risk_type = str(it.get("risk_type", "risk"))
+        severity = str(it.get("severity", "unknown"))
+        reason = (
+            f"GitHub {risk_type} ({severity}): see issue tracker"
+            if not is_zh
+            else f"GitHub {risk_type}（{severity}）：请查看 issue 追踪"
+        )
         out.append(
             ScoreRisk(
                 title=str(it.get("title", "open issue"))[:200],
-                reason=f"GitHub {it.get('risk_type', 'risk')} ({it.get('severity', 'unknown')}): see issue tracker",
+                reason=reason,
                 evidence_refs=[ref] if ref else [],
             )
         )
@@ -158,6 +170,7 @@ def _insight_evidence_refs(insight: Dict[str, Any], max_each: int = 15) -> List[
 # ------------------------------------------------------------------
 
 _RISK_PROMPT = """\
+{language_instruction}
 You are a reproducibility auditor. Given the repository file tree, an analysis report, \
 and optional GitHub issue/commit signals (JSON), identify **reproducibility risks** and write a brief summary.
 
@@ -186,10 +199,22 @@ If no risks, return {{"risks": [], "summary": "..."}}.
 """
 
 
+def _strip_json_fences(raw: str) -> str:
+    text = (raw or "").strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    return text
+
+
+def _language_instruction(language: str) -> str:
+    return "请用中文输出。" if language == "zh" else "Please respond in English."
+
+
 async def _llm_risks_and_summary(
     file_tree: str,
     report: str,
     insight: Dict[str, Any],
+    language: str,
 ) -> tuple[List[ScoreRisk], str]:
     """Call LLM to generate risk list and summary."""
     client = get_client()
@@ -203,6 +228,7 @@ async def _llm_risks_and_summary(
         insight_json = "{}"
 
     prompt = _RISK_PROMPT.format(
+        language_instruction=_language_instruction(language),
         file_tree=file_tree[:6000],
         report=report[:4000],
         insight_json=insight_json,
@@ -216,11 +242,7 @@ async def _llm_risks_and_summary(
             max_tokens=1024,
             stream=False,
         )
-        raw = response.choices[0].message.content.strip()
-        # strip markdown fences if present
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
-        data = json.loads(raw)
+        data = json.loads(_strip_json_fences(response.choices[0].message.content))
 
         risks = [
             ScoreRisk(
@@ -236,6 +258,150 @@ async def _llm_risks_and_summary(
     except Exception as e:
         logger.error("LLM risk analysis failed: %s", e, exc_info=True)
         return [], "Risk analysis unavailable due to LLM error."
+
+
+_LOCALIZE_SCORE_PROMPT = """\
+Translate the following reproducibility score payload to {target_language}.
+Preserve technical meaning and output valid JSON only.
+
+Input JSON:
+{source_json}
+
+Output schema:
+{{
+  "summary": "...",
+  "risks": [
+    {{"title": "...", "reason": "...", "evidence_refs": ["..."]}}
+  ]
+}}
+"""
+
+
+async def _localize_score_payload(
+    source_payload: Dict[str, Any],
+    target_language: str,
+) -> Optional[Dict[str, Any]]:
+    if not source_payload:
+        return None
+    client = get_client()
+    if not client:
+        return None
+
+    try:
+        prompt = _LOCALIZE_SCORE_PROMPT.format(
+            target_language="Chinese" if target_language == "zh" else "English",
+            source_json=json.dumps(source_payload, ensure_ascii=False)[:6000],
+        )
+        response = await client.chat.completions.create(
+            model=settings.default_model_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=1024,
+            stream=False,
+        )
+        data = json.loads(_strip_json_fences(response.choices[0].message.content))
+        risks = data.get("risks", [])
+        if not isinstance(risks, list):
+            risks = []
+        return {
+            "summary": str(data.get("summary", "")),
+            "risks": [
+                {
+                    "title": str(r.get("title", "")),
+                    "reason": str(r.get("reason", "")),
+                    "evidence_refs": list(r.get("evidence_refs", [])) if isinstance(r, dict) else [],
+                }
+                for r in risks
+                if isinstance(r, dict)
+            ],
+        }
+    except Exception as e:
+        logger.warning("score localization failed: %s", e)
+        return None
+
+
+def _build_core_payload(
+    dim_raw: DimensionScores,
+    overall_raw: float,
+    evidence_refs: List[str],
+) -> Dict[str, Any]:
+    return {
+        "overall_score": round(overall_raw * 100),
+        "overall_score_raw": overall_raw,
+        "level": ReproScoreResult.compute_level(overall_raw),
+        "quality_tier": ReproScoreResult.compute_tier(overall_raw),
+        "dimension_scores_raw": {
+            "code_structure": dim_raw.code_structure,
+            "docs_quality": dim_raw.docs_quality,
+            "env_readiness": dim_raw.env_readiness,
+            "community_stability": dim_raw.community_stability,
+        },
+        "evidence_refs": evidence_refs,
+    }
+
+
+def _extract_evidence_refs(
+    file_tree: str,
+    risks: List[ScoreRisk],
+    insight: Dict[str, Any],
+) -> List[str]:
+    evidence: List[str] = []
+    for pattern in [
+        r"README(\.\w+)?",
+        r"requirements.*\.txt",
+        r"Dockerfile",
+        r"setup\.py|pyproject\.toml",
+    ]:
+        m = re.search(pattern, file_tree, re.IGNORECASE)
+        if m:
+            evidence.append(m.group(0))
+
+    for r in risks:
+        evidence.extend(r.evidence_refs)
+    evidence.extend(_insight_evidence_refs(insight))
+    return list(dict.fromkeys(evidence))
+
+
+def _build_result_from_cached(
+    core_data: Dict[str, Any],
+    localized_data: Dict[str, Any],
+    language: str,
+    cache_hit: bool,
+) -> ReproScoreResult:
+    dim_src = core_data.get("dimension_scores_raw", {}) or {}
+    dim_raw = DimensionScores(
+        code_structure=float(dim_src.get("code_structure", 0.0) or 0.0),
+        docs_quality=float(dim_src.get("docs_quality", 0.0) or 0.0),
+        env_readiness=float(dim_src.get("env_readiness", 0.0) or 0.0),
+        community_stability=float(dim_src.get("community_stability", 0.0) or 0.0),
+    )
+
+    risks: List[ScoreRisk] = []
+    for item in (localized_data.get("risks") or []):
+        if not isinstance(item, dict):
+            continue
+        risks.append(
+            ScoreRisk(
+                title=str(item.get("title", "")),
+                reason=str(item.get("reason", "")),
+                evidence_refs=list(item.get("evidence_refs", [])) if isinstance(item.get("evidence_refs", []), list) else [],
+            )
+        )
+
+    overall_raw = float(core_data.get("overall_score_raw", _aggregate(dim_raw)))
+    return ReproScoreResult(
+        overall_score=int(core_data.get("overall_score", round(overall_raw * 100))),
+        overall_score_raw=overall_raw,
+        level=str(core_data.get("level", ReproScoreResult.compute_level(overall_raw))),
+        quality_tier=str(core_data.get("quality_tier", ReproScoreResult.compute_tier(overall_raw))),
+        dimension_scores=dim_raw,
+        dimension_scores_raw=dim_raw,
+        risks=risks,
+        evidence_refs=list(core_data.get("evidence_refs", [])),
+        summary=str(localized_data.get("summary", "")),
+        language=language,
+        cache_hit=cache_hit,
+    )
 
 
 # ------------------------------------------------------------------
@@ -258,6 +424,8 @@ async def compute_repro_score(
     session_id: Optional[str] = None,
     repo_url: Optional[str] = None,
     *,
+    language: str = "en",
+    force: bool = False,
     insight_since_days: int = 90,
     insight_limit: int = 100,
 ) -> ReproScoreResult:
@@ -276,11 +444,44 @@ async def compute_repro_score(
     Raises:
         ValueError: session 无上下文（仓库未分析）
     """
+    target_language = "zh" if language == "zh" else "en"
     sid = _resolve_session(session_id, repo_url)
     store = store_manager.get_store(sid)
     context = store.load_context()
     if not context or not context.get("repo_url"):
         raise ValueError(f"Session {sid} has no analyzed context. Run /analyze first.")
+
+    core_cached_entry = store.get_score_core()
+    localized_cached_entry = store.get_score_localized(target_language)
+    core_cached = core_cached_entry.get("data", {}) if isinstance(core_cached_entry, dict) else {}
+    localized_cached = localized_cached_entry.get("data", {}) if isinstance(localized_cached_entry, dict) else {}
+
+    if not force and core_cached and localized_cached:
+        return _build_result_from_cached(
+            core_data=core_cached,
+            localized_data=localized_cached,
+            language=target_language,
+            cache_hit=True,
+        )
+
+    # 语言缺失时优先从其他语言缓存重建（不重算核心分数）
+    if not force and core_cached and not localized_cached:
+        for source_lang in store.get_score_localized_languages():
+            if source_lang == target_language:
+                continue
+            source_entry = store.get_score_localized(source_lang)
+            source_payload = source_entry.get("data", {}) if isinstance(source_entry, dict) else {}
+            if not source_payload:
+                continue
+            rebuilt = await _localize_score_payload(source_payload, target_language)
+            if rebuilt:
+                await store.save_score_localized(target_language, rebuilt)
+                return _build_result_from_cached(
+                    core_data=core_cached,
+                    localized_data=rebuilt,
+                    language=target_language,
+                    cache_hit=True,
+                )
 
     global_ctx = context.get("global_context", {})
     file_tree: str = global_ctx.get("file_tree", "")
@@ -305,43 +506,33 @@ async def compute_repro_score(
     overall_raw = _aggregate(dim_raw)
 
     # 2. LLM 生成 risks / summary（含 insight JSON）
-    risks, summary = await _llm_risks_and_summary(file_tree, report, insight)
+    llm_risks, summary = await _llm_risks_and_summary(file_tree, report, insight, target_language)
 
     # 2b. 合并 issue 风险（置前，便于阅读）
-    insight_risks = _risks_from_insight(insight)
-    risks = insight_risks + risks
+    insight_risks = _risks_from_insight(insight, target_language)
+    risks = insight_risks + llm_risks
 
-    # 3. 收集 evidence_refs（来自 file_tree 中检测到的关键文件）
-    evidence: List[str] = []
-    for pattern, label in [
-        (r"README(\.\w+)?", "README"),
-        (r"requirements.*\.txt", "requirements.txt"),
-        (r"Dockerfile", "Dockerfile"),
-        (r"setup\.py|pyproject\.toml", "setup/pyproject"),
-    ]:
-        m = re.search(pattern, file_tree, re.IGNORECASE)
-        if m:
-            evidence.append(m.group(0))
+    # 3. 收集 evidence_refs + 持久化 core/localized
+    evidence_refs = _extract_evidence_refs(file_tree, risks, insight)
+    core_payload = _build_core_payload(dim_raw, overall_raw, evidence_refs)
+    localized_payload = {
+        "summary": summary,
+        "risks": [
+            {
+                "title": r.title,
+                "reason": r.reason,
+                "evidence_refs": r.evidence_refs,
+            }
+            for r in risks
+        ],
+    }
+    await store.save_score_core(core_payload)
+    await store.save_score_localized(target_language, localized_payload)
 
-    for r in risks:
-        evidence.extend(r.evidence_refs)
-    evidence.extend(_insight_evidence_refs(insight))
-    evidence = list(dict.fromkeys(evidence))  # deduplicate, preserve order
-
-    result = ReproScoreResult(
-        overall_score=round(overall_raw * 100),
-        overall_score_raw=overall_raw,
-        level=ReproScoreResult.compute_level(overall_raw),
-        quality_tier=ReproScoreResult.compute_tier(overall_raw),
-        dimension_scores=DimensionScores(
-            code_structure=dim_raw.code_structure,
-            docs_quality=dim_raw.docs_quality,
-            env_readiness=dim_raw.env_readiness,
-            community_stability=dim_raw.community_stability,
-        ),
-        dimension_scores_raw=dim_raw,
-        risks=risks,
-        evidence_refs=evidence,
-        summary=summary,
+    result = _build_result_from_cached(
+        core_data=core_payload,
+        localized_data=localized_payload,
+        language=target_language,
+        cache_hit=False,
     )
     return result

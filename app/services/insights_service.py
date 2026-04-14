@@ -10,14 +10,30 @@ Insights 服务 — Issue 摘要 & Commit Roadmap
 import json
 import logging
 import httpx
-from typing import List
+from typing import List, Optional
 
 from app.core.config import settings
 from app.utils.llm_client import client
 from app.services.github_service import get_repo_issues, get_repo_commits
 from app.utils.github_client import GitHubIssue, GitHubCommit
+from app.services.vector_service import store_manager
+from app.utils.session import generate_repo_session_id
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_session(session_id: Optional[str], repo_url: str) -> str:
+    if session_id:
+        return session_id
+    if repo_url:
+        return generate_repo_session_id(repo_url)
+    raise ValueError("session_id or repo_url is required")
+
+
+def _yield_text_chunks(text: str, chunk_size: int = 900):
+    value = text or ""
+    for i in range(0, len(value), chunk_size):
+        yield value[i:i + chunk_size]
 
 
 # ============================================================
@@ -58,7 +74,12 @@ You are a senior software analyst. Given the following GitHub Issues, produce a 
 """
 
 
-async def issue_summary_stream(repo_url: str, session_id: str, language: str = "en"):
+async def issue_summary_stream(
+    repo_url: str,
+    session_id: Optional[str],
+    language: str = "en",
+    force: bool = False,
+):
     """
     SSE generator: 抓取 Issues → LLM 流式生成结构化笔记
 
@@ -66,6 +87,24 @@ async def issue_summary_stream(repo_url: str, session_id: str, language: str = "
       step = fetching | summarizing | content_chunk | finish | error
     """
     try:
+        sid = _resolve_session(session_id, repo_url)
+        store = store_manager.get_store(sid)
+        target_language = "zh" if language == "zh" else "en"
+
+        if not force:
+            cached = store.get_artifact("issues", target_language)
+            cached_data = cached.get("data", {}) if isinstance(cached, dict) else {}
+            cached_content = str(cached_data.get("content", "")).strip()
+            if cached_content:
+                yield json.dumps({
+                    "step": "fetching",
+                    "message": "Loaded cached issue summary.",
+                })
+                for piece in _yield_text_chunks(cached_content):
+                    yield json.dumps({"step": "content_chunk", "chunk": piece})
+                yield json.dumps({"step": "finish", "message": "Issue summary loaded from cache."})
+                return
+
         yield json.dumps({
             "step": "fetching",
             "message": "Fetching issues from GitHub..."
@@ -100,12 +139,21 @@ async def issue_summary_stream(repo_url: str, session_id: str, language: str = "
             timeout=settings.LLM_TIMEOUT,
         )
 
+        full_content = ""
         async for chunk in stream:
             if chunk.choices[0].delta.content:
+                full_content += chunk.choices[0].delta.content
                 yield json.dumps({
                     "step": "content_chunk",
                     "chunk": chunk.choices[0].delta.content,
                 })
+
+        if full_content.strip():
+            await store.save_artifact(
+                kind="issues",
+                language=target_language,
+                payload={"content": full_content},
+            )
 
         yield json.dumps({"step": "finish", "message": "Issue summary complete!"})
 
@@ -166,7 +214,12 @@ Group sections by month (or by week if all commits fall in the same month). Sect
 """
 
 
-async def commit_roadmap_stream(repo_url: str, session_id: str, language: str = "en"):
+async def commit_roadmap_stream(
+    repo_url: str,
+    session_id: Optional[str],
+    language: str = "en",
+    force: bool = False,
+):
     """
     SSE generator: 抓取 Commits → LLM 流式生成 Mermaid Timeline roadmap
 
@@ -174,6 +227,24 @@ async def commit_roadmap_stream(repo_url: str, session_id: str, language: str = 
       step = fetching | analyzing | content_chunk | finish | error
     """
     try:
+        sid = _resolve_session(session_id, repo_url)
+        store = store_manager.get_store(sid)
+        target_language = "zh" if language == "zh" else "en"
+
+        if not force:
+            cached = store.get_artifact("roadmap", target_language)
+            cached_data = cached.get("data", {}) if isinstance(cached, dict) else {}
+            cached_content = str(cached_data.get("content", "")).strip()
+            if cached_content:
+                yield json.dumps({
+                    "step": "fetching",
+                    "message": "Loaded cached roadmap.",
+                })
+                for piece in _yield_text_chunks(cached_content):
+                    yield json.dumps({"step": "content_chunk", "chunk": piece})
+                yield json.dumps({"step": "finish", "message": "Roadmap loaded from cache."})
+                return
+
         yield json.dumps({
             "step": "fetching",
             "message": "Fetching commits from GitHub..."
@@ -208,12 +279,21 @@ async def commit_roadmap_stream(repo_url: str, session_id: str, language: str = 
             timeout=settings.LLM_TIMEOUT,
         )
 
+        full_content = ""
         async for chunk in stream:
             if chunk.choices[0].delta.content:
+                full_content += chunk.choices[0].delta.content
                 yield json.dumps({
                     "step": "content_chunk",
                     "chunk": chunk.choices[0].delta.content,
                 })
+
+        if full_content.strip():
+            await store.save_artifact(
+                kind="roadmap",
+                language=target_language,
+                payload={"content": full_content},
+            )
 
         yield json.dumps({"step": "finish", "message": "Roadmap generation complete!"})
 

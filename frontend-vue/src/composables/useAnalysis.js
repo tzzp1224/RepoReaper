@@ -1,11 +1,13 @@
 import { useAppStore, BTN_STATE } from '../stores/app'
 import { checkRepoSession, createAnalysisStream } from '../api/repo'
+import { useScore } from './useScore'
 
 /**
  * 分析逻辑组合式函数
  */
 export function useAnalysis() {
   const store = useAppStore()
+  const { loadScore } = useScore()
   
   /**
    * 处理分析按钮点击
@@ -93,6 +95,10 @@ export function useAnalysis() {
         store.setHint('reportReady', 'success')
         store.chatEnabled = true
         store.addChatMessage('ai', '🎉 Analysis complete! You can ask questions now.')
+        // Analyze 链路完成后自动生成 score（可重入、可覆盖）
+        loadScore({ force: true }).catch((err) => {
+          console.warn('auto score generation failed:', err)
+        })
       } else if (data.step === 'error') {
         store.addLog(`❌ ${data.message}`, '#b91c1c')
         eventSource.close()
@@ -126,6 +132,8 @@ export function useAnalysis() {
    */
   async function handleLanguageChange(newLang) {
     store.language = newLang
+    store.resetInsightsState()
+    store.resetScoreState()
     
     if (!store.repoUrl.trim()) return
     
@@ -183,6 +191,12 @@ export function useAnalysis() {
       console.error('Language switch check failed:', e)
       store.hasAnalyzedContext = false
       store.buttonState = BTN_STATE.ANALYZE
+    }
+
+    if (store.activeInsightTab === 'score' && store.canUseAnalyzedContext) {
+      loadScore().catch((err) => {
+        console.warn('load score after language switch failed:', err)
+      })
     }
   }
   

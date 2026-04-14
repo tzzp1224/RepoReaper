@@ -1,17 +1,22 @@
 <template>
   <div class="insight-panel">
-    <div class="panel-toolbar">
+    <div v-if="store.issueNotes" class="panel-toolbar">
       <button class="refresh-btn" :disabled="!canRefresh" @click="refreshIssues">
         Refresh
       </button>
     </div>
     <div class="markdown-body" ref="contentRef">
       <div v-if="!store.issueNotes && !store.isIssueStreaming" class="placeholder">
-        <div class="placeholder-icon">📋</div>
+        <div class="placeholder-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4.5 4.5h4.8a2 2 0 0 1 1.4.58l.3.3a2 2 0 0 0 1.4.58h3v9H10.6a2.5 2.5 0 0 0-1.77.73l-.23.23-.23-.23A2.5 2.5 0 0 0 6.6 15H4.5z" />
+            <path d="M10 5v10.5" />
+          </svg>
+        </div>
         <div class="placeholder-title">Issues Notebook</div>
-        <div class="placeholder-text">Run analysis to surface identified code issues and suggestions.</div>
-        <button class="fetch-btn" @click="refreshIssues" :disabled="!canRefresh">
-          📋 Fetch Issues
+        <div class="placeholder-text">Issue summary will be generated here.</div>
+        <button class="fetch-btn" @click="generateIssues" :disabled="!canRefresh">
+          Generate Issues
         </button>
       </div>
       <div v-else v-html="parsedHtml"></div>
@@ -23,20 +28,34 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useAppStore } from '../stores/app'
 import { useInsights } from '../composables/useInsights'
 import { renderMarkdownSafe } from '../utils/markdownSafe'
 
 const store = useAppStore()
-const { fetchIssues } = useInsights()
+const { fetchIssues, loadIssuesSnapshot } = useInsights()
 
 const parsedHtml = computed(() => (store.issueNotes ? renderMarkdownSafe(store.issueNotes) : ''))
-const canRefresh = computed(() => store.canUseAnalyzedContext && !store.isIssueStreaming)
+const canRefresh = computed(() => Boolean(store.repoUrl.trim()) && !store.isIssueStreaming)
+
+function generateIssues() {
+  fetchIssues({ force: true })
+}
 
 function refreshIssues() {
   fetchIssues({ force: true })
 }
+
+watch(
+  () => [store.sessionId, store.language],
+  () => {
+    if (store.isIssueStreaming) return
+    if (!store.repoUrl.trim()) return
+    loadIssuesSnapshot()
+  },
+  { immediate: true }
+)
 </script>
 
 <style scoped>
@@ -107,19 +126,12 @@ function refreshIssues() {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 4px;
-  color: transparent;
-  font-size: 0;
+  color: #78716c;
 }
 
-.placeholder-icon::before {
-  content: "";
+.placeholder-icon svg {
   width: 20px;
-  height: 16px;
-  border: 2px solid #a8a29e;
-  border-top-width: 1px;
-  border-radius: 2px;
-  box-shadow: inset 8px 0 0 #f5f5f4, inset 10px 0 0 #a8a29e;
+  height: 20px;
 }
 
 .placeholder-title {
@@ -136,7 +148,7 @@ function refreshIssues() {
 .fetch-btn {
   margin-top: 6px;
   padding: 7px 12px;
-  font-size: 0;
+  font-size: 12px;
   font-weight: 500;
   color: #57534e;
   background: #fff;
@@ -144,11 +156,6 @@ function refreshIssues() {
   border-radius: 8px;
   cursor: pointer;
   transition: background 0.2s, border-color 0.2s;
-}
-
-.fetch-btn::after {
-  content: "Fetch Issues";
-  font-size: 12px;
 }
 
 .fetch-btn:hover:not(:disabled) {

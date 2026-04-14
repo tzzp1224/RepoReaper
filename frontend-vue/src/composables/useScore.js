@@ -9,9 +9,11 @@ export function useScore() {
     return normalized.includes('no analyzed context') || normalized.includes('run /analyze first')
   }
 
-  async function loadScore() {
+  async function loadScore(options = {}) {
+    const force = Boolean(options?.force)
     if (!store.canUseAnalyzedContext) {
       store.scoreError = ''
+      store.scoreResult = null
       return null
     }
 
@@ -24,7 +26,10 @@ export function useScore() {
     store.scoreError = ''
 
     try {
-      const response = await fetchReproScore(store.sessionId, store.repoUrl)
+      const response = await fetchReproScore(store.sessionId, store.repoUrl, {
+        language: store.language,
+        force
+      })
       if (response.status === 'success') {
         store.scoreResult = response.data
         return response.data

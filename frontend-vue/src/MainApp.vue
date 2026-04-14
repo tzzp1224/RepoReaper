@@ -61,10 +61,8 @@ import PaperAlignWorkspace from './components/PaperAlignWorkspace.vue'
 import PanelResizer from './components/PanelResizer.vue'
 import ImageModal from './components/ImageModal.vue'
 import { useAppStore } from './stores/app'
-import { useInsights } from './composables/useInsights'
 
 const store = useAppStore()
-const { fetchIssues, fetchRoadmap } = useInsights()
 
 const view = ref('main')
 const leftPaneWidth = ref(0)
@@ -110,12 +108,6 @@ function handleResize(clientX) {
 
 function handleTabChange(tab) {
   store.activeInsightTab = tab
-  if (tab === 'issues' && !store.issueNotes && !store.isIssueStreaming && store.canUseAnalyzedContext) {
-    fetchIssues()
-  }
-  if (tab === 'roadmap' && !store.roadmapContent && !store.isRoadmapStreaming && store.canUseAnalyzedContext) {
-    fetchRoadmap()
-  }
 }
 
 function handlePaperAlign() {

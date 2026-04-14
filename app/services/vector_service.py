@@ -17,6 +17,7 @@ import pickle
 import re
 import tempfile
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Set
 
@@ -306,6 +307,184 @@ class VectorStore:
         
         reports = context.get("reports", {})
         return list(reports.keys())
+
+    # ------------------------------------------------------------------
+    # Artifact 持久化（issues / roadmap / score）
+    # ------------------------------------------------------------------
+
+    def _now_iso(self) -> str:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    async def save_artifact(
+        self,
+        kind: str,
+        language: str,
+        payload: Dict[str, Any],
+        generated_at: Optional[str] = None,
+    ) -> None:
+        """保存通用 artifact 快照（按 kind + language）。"""
+        await asyncio.to_thread(
+            self._write_artifact,
+            kind,
+            language,
+            payload,
+            generated_at or self._now_iso(),
+        )
+
+    def _write_artifact(
+        self,
+        kind: str,
+        language: str,
+        payload: Dict[str, Any],
+        generated_at: str,
+    ) -> None:
+        try:
+            existing: Dict[str, Any] = {}
+            if os.path.exists(self._context_file):
+                with open(self._context_file, 'r', encoding='utf-8') as f:
+                    existing = json.load(f)
+
+            artifacts = existing.setdefault("artifacts", {})
+            by_kind = artifacts.setdefault(kind, {})
+            by_kind[language] = {
+                "data": payload or {},
+                "generated_at": generated_at,
+            }
+
+            with open(self._context_file, 'w', encoding='utf-8') as f:
+                json.dump(existing, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error("保存 artifact 失败 (%s/%s): %s", kind, language, e)
+
+    def get_artifact(self, kind: str, language: str) -> Optional[Dict[str, Any]]:
+        """读取通用 artifact 快照。"""
+        context = self.load_context()
+        if not context:
+            return None
+        artifacts = context.get("artifacts", {})
+        by_kind = artifacts.get(kind, {})
+        item = by_kind.get(language)
+        if not isinstance(item, dict):
+            return None
+        return item
+
+    def get_artifact_languages(self, kind: str) -> List[str]:
+        """读取某类 artifact 的可用语言列表。"""
+        context = self.load_context()
+        if not context:
+            return []
+        artifacts = context.get("artifacts", {})
+        by_kind = artifacts.get(kind, {})
+        if not isinstance(by_kind, dict):
+            return []
+        return list(by_kind.keys())
+
+    async def save_score_core(
+        self,
+        core_payload: Dict[str, Any],
+        generated_at: Optional[str] = None,
+    ) -> None:
+        """保存 score 核心结果（语言无关）。"""
+        await asyncio.to_thread(
+            self._write_score_core,
+            core_payload,
+            generated_at or self._now_iso(),
+        )
+
+    def _write_score_core(self, core_payload: Dict[str, Any], generated_at: str) -> None:
+        try:
+            existing: Dict[str, Any] = {}
+            if os.path.exists(self._context_file):
+                with open(self._context_file, 'r', encoding='utf-8') as f:
+                    existing = json.load(f)
+
+            artifacts = existing.setdefault("artifacts", {})
+            score_artifact = artifacts.setdefault("score", {})
+            score_artifact["core"] = {
+                "data": core_payload or {},
+                "generated_at": generated_at,
+            }
+
+            with open(self._context_file, 'w', encoding='utf-8') as f:
+                json.dump(existing, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error("保存 score core 失败: %s", e)
+
+    def get_score_core(self) -> Optional[Dict[str, Any]]:
+        """读取 score 核心结果。"""
+        context = self.load_context()
+        if not context:
+            return None
+        artifacts = context.get("artifacts", {})
+        score_artifact = artifacts.get("score", {})
+        core = score_artifact.get("core")
+        if not isinstance(core, dict):
+            return None
+        return core
+
+    async def save_score_localized(
+        self,
+        language: str,
+        localized_payload: Dict[str, Any],
+        generated_at: Optional[str] = None,
+    ) -> None:
+        """保存 score 多语言文本快照。"""
+        await asyncio.to_thread(
+            self._write_score_localized,
+            language,
+            localized_payload,
+            generated_at or self._now_iso(),
+        )
+
+    def _write_score_localized(
+        self,
+        language: str,
+        localized_payload: Dict[str, Any],
+        generated_at: str,
+    ) -> None:
+        try:
+            existing: Dict[str, Any] = {}
+            if os.path.exists(self._context_file):
+                with open(self._context_file, 'r', encoding='utf-8') as f:
+                    existing = json.load(f)
+
+            artifacts = existing.setdefault("artifacts", {})
+            score_artifact = artifacts.setdefault("score", {})
+            localized = score_artifact.setdefault("localized", {})
+            localized[language] = {
+                "data": localized_payload or {},
+                "generated_at": generated_at,
+            }
+
+            with open(self._context_file, 'w', encoding='utf-8') as f:
+                json.dump(existing, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error("保存 score localized 失败 (%s): %s", language, e)
+
+    def get_score_localized(self, language: str) -> Optional[Dict[str, Any]]:
+        """读取 score 指定语言文本快照。"""
+        context = self.load_context()
+        if not context:
+            return None
+        artifacts = context.get("artifacts", {})
+        score_artifact = artifacts.get("score", {})
+        localized = score_artifact.get("localized", {})
+        item = localized.get(language)
+        if not isinstance(item, dict):
+            return None
+        return item
+
+    def get_score_localized_languages(self) -> List[str]:
+        """读取 score 已有文本语言列表。"""
+        context = self.load_context()
+        if not context:
+            return []
+        artifacts = context.get("artifacts", {})
+        score_artifact = artifacts.get("score", {})
+        localized = score_artifact.get("localized", {})
+        if not isinstance(localized, dict):
+            return []
+        return list(localized.keys())
     
     def load_context(self) -> Optional[Dict[str, Any]]:
         """

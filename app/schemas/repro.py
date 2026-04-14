@@ -41,6 +41,8 @@ class ReproScoreResult:
     risks: List[ScoreRisk] = field(default_factory=list)
     evidence_refs: List[str] = field(default_factory=list)
     summary: str = ""
+    language: str = "en"
+    cache_hit: bool = False
 
     @staticmethod
     def compute_level(raw: float) -> str:
@@ -84,6 +86,8 @@ class ReproScoreResult:
             ],
             "evidence_refs": self.evidence_refs,
             "summary": self.summary,
+            "language": self.language,
+            "cache_hit": self.cache_hit,
         }
 
 
@@ -94,16 +98,19 @@ class ReproScoreResult:
 @dataclass
 class AlignmentItem:
     claim: str
-    status: str                              # aligned / partial / missing
+    status: str                              # aligned / partial / missing / insufficient_evidence
     matched_files: List[str] = field(default_factory=list)
     matched_symbols: List[str] = field(default_factory=list)
     evidence_excerpt: str = ""
+    debug_info: Optional[dict] = None
 
 
 @dataclass
 class MissingClaim:
     claim: str
     reason: str = ""
+    status: str = "missing"
+    debug_info: Optional[dict] = None
 
 
 @dataclass
@@ -121,11 +128,12 @@ class PaperAlignResult:
                     "matched_files": a.matched_files,
                     "matched_symbols": a.matched_symbols,
                     "evidence_excerpt": a.evidence_excerpt,
+                    "debug_info": a.debug_info,
                 }
                 for a in self.alignment_items
             ],
             "missing_claims": [
-                {"claim": m.claim, "reason": m.reason}
+                {"claim": m.claim, "reason": m.reason, "status": m.status, "debug_info": m.debug_info}
                 for m in self.missing_claims
             ],
             "confidence": round(self.confidence, 4),

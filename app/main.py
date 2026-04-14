@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 import logging
+from typing import Optional
 
 from app.core.config import settings, auto_eval_config as runtime_auto_eval_config
 
@@ -267,6 +268,8 @@ async def repro_score(request: Request):
 
     session_id = data.get("session_id")
     repo_url = data.get("repo_url") or data.get("url")
+    language = data.get("language", "en")
+    force = bool(data.get("force", False))
 
     if not session_id and not repo_url:
         return _unified_error("INVALID_ARGUMENT", "session_id or repo_url is required")
@@ -277,6 +280,8 @@ async def repro_score(request: Request):
         result = await compute_repro_score(
             session_id=session_id,
             repo_url=repo_url,
+            language=language,
+            force=force,
             insight_since_days=since_days,
             insight_limit=limit,
         )
@@ -344,7 +349,12 @@ async def analyze(url: str, session_id: str, language: str = "en", regenerate_on
 # === Insights 端点: Issue 摘要 & Commit Roadmap ===
 
 @app.get("/api/insights/issues")
-async def insights_issues(url: str, session_id: str, language: str = "en"):
+async def insights_issues(
+    url: str,
+    session_id: Optional[str] = None,
+    language: str = "en",
+    force: bool = False,
+):
     """
     Issue 摘要端点 (SSE)
 
@@ -352,11 +362,16 @@ async def insights_issues(url: str, session_id: str, language: str = "en"):
     """
     if not url:
         return {"error": "Missing url"}
-    return EventSourceResponse(issue_summary_stream(url, session_id, language))
+    return EventSourceResponse(issue_summary_stream(url, session_id, language, force=force))
 
 
 @app.get("/api/insights/commits")
-async def insights_commits(url: str, session_id: str, language: str = "en"):
+async def insights_commits(
+    url: str,
+    session_id: Optional[str] = None,
+    language: str = "en",
+    force: bool = False,
+):
     """
     Commit Roadmap 端点 (SSE)
 
@@ -364,7 +379,61 @@ async def insights_commits(url: str, session_id: str, language: str = "en"):
     """
     if not url:
         return {"error": "Missing url"}
-    return EventSourceResponse(commit_roadmap_stream(url, session_id, language))
+    return EventSourceResponse(commit_roadmap_stream(url, session_id, language, force=force))
+
+
+@app.get("/api/repo/artifacts")
+async def repo_artifacts(
+    artifact: str,
+    language: str = "en",
+    session_id: Optional[str] = None,
+    repo_url: Optional[str] = None,
+    url: Optional[str] = None,
+):
+    """读取仓库 artifact 快照（issues / roadmap / score）。"""
+    from app.utils.session import generate_repo_session_id
+
+    normalized_artifact = (artifact or "").strip().lower()
+    if normalized_artifact not in {"issues", "roadmap", "score"}:
+        return _unified_error("INVALID_ARGUMENT", "artifact must be one of: issues, roadmap, score")
+
+    effective_repo_url = (repo_url or url or "").strip()
+    sid = session_id or (generate_repo_session_id(effective_repo_url) if effective_repo_url else "")
+    if not sid:
+        return _unified_error("INVALID_ARGUMENT", "session_id or repo_url is required")
+
+    store = store_manager.get_store(sid)
+    target_lang = "zh" if language == "zh" else "en"
+
+    if normalized_artifact == "score":
+        core_entry = store.get_score_core()
+        localized_entry = store.get_score_localized(target_lang)
+        exists = bool(core_entry and localized_entry)
+        payload = None
+        generated_at = None
+        if exists:
+            payload = {
+                "core": core_entry.get("data", {}),
+                "localized": localized_entry.get("data", {}),
+            }
+            generated_at = localized_entry.get("generated_at")
+        available_languages = store.get_score_localized_languages()
+    else:
+        entry = store.get_artifact(normalized_artifact, target_lang)
+        exists = bool(entry and entry.get("data"))
+        payload = entry.get("data") if exists else None
+        generated_at = entry.get("generated_at") if exists else None
+        available_languages = store.get_artifact_languages(normalized_artifact)
+
+    return _unified_success({
+        "artifact": normalized_artifact,
+        "language": target_lang,
+        "session_id": sid,
+        "exists": exists,
+        "data": payload,
+        "generated_at": generated_at,
+        "available_languages": available_languages,
+    })
 
 
 @app.post("/chat")

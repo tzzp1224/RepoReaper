@@ -272,6 +272,8 @@ export const useAppStore = defineStore('app', () => {
       hideHint()
       hasAnalyzedContext.value = false
       currentRepoUrl.value = ''
+      resetInsightsState()
+      resetScoreState()
       return null
     }
     
