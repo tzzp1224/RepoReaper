@@ -59,12 +59,12 @@ const isRendering = ref(false)
 let lastRenderTime = 0
 const renderedMermaidCache = new Map()
 
-function refreshRoadmap() {
-  fetchRoadmap({ force: true })
+async function refreshRoadmap() {
+  await fetchRoadmap({ force: true })
 }
 
-function generateRoadmap() {
-  fetchRoadmap({ force: true })
+async function generateRoadmap() {
+  await fetchRoadmap({ force: true })
 }
 
 // 初始化 Mermaid，并在挂载时恢复已有内容（如从 PaperAlign 返回后重新挂载）
@@ -81,11 +81,11 @@ onMounted(() => {
 })
 
 watch(
-  () => [store.sessionId, store.language],
-  () => {
+  () => [store.sessionId, store.language, store.repoUrl],
+  async () => {
     if (store.isRoadmapStreaming) return
     if (!store.repoUrl.trim()) return
-    loadRoadmapSnapshot()
+    await loadRoadmapSnapshot()
   },
   { immediate: true }
 )
@@ -229,7 +229,13 @@ watch(() => store.isRoadmapStreaming, async (streaming, was) => {
 })
 
 watch(() => store.activeInsightTab, async (tab) => {
-  if (tab === 'roadmap' && store.roadmapContent && !store.isRoadmapStreaming) {
+  if (tab !== 'roadmap') return
+
+  if (!store.roadmapContent && !store.isRoadmapStreaming && store.repoUrl.trim()) {
+    await loadRoadmapSnapshot()
+  }
+
+  if (store.roadmapContent && !store.isRoadmapStreaming) {
     clearMarkdownRenderTimeout()
     await nextTick()
     scheduleMarkdownRender(store.roadmapContent, true)

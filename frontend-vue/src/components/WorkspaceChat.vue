@@ -39,7 +39,9 @@
     </div>
 
     <div v-if="showSuggestions" class="suggestions">
-      <p>Suggested questions</p>
+      <p :class="{ loading: suggestionsLoading }">
+        {{ suggestionsLoading ? 'Loading suggested questions...' : 'Suggested questions' }}
+      </p>
       <button
         v-for="question in suggestedQuestions"
         :key="question"
@@ -80,6 +82,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app'
 import { useChat } from '../composables/useChat'
+import { fetchSuggestedQuestions } from '../api/repo'
 import { renderMarkdownSafe } from '../utils/markdownSafe'
 
 const store = useAppStore()
@@ -87,6 +90,8 @@ const { sendMessage, stopGeneration } = useChat()
 
 const inputText = ref('')
 const historyRef = ref(null)
+const suggestedQuestions = ref([])
+const suggestionsLoading = ref(false)
 
 const repoLabel = computed(() => store.repoUrl.trim() || 'No repository selected')
 const systemStatusText = computed(() => (
@@ -97,12 +102,12 @@ const inputPlaceholder = computed(() => {
     ? 'Ask anything about the repository...'
     : 'Analyze a repository first...'
 })
-const suggestedQuestions = [
-  '这个项目主要的功能模块是什么？',
-  '项目的技术栈和依赖有哪些？',
-  'RAG 检索流程是怎么设计的？'
-]
-const showSuggestions = computed(() => store.chatMessages.length <= 2 && !store.isChatGenerating)
+const showSuggestions = computed(() => (
+  store.chatEnabled &&
+  store.chatMessages.length <= 2 &&
+  !store.isChatGenerating &&
+  suggestedQuestions.value.length > 0
+))
 
 function renderMarkdown(content) {
   return renderMarkdownSafe(content || '')
@@ -134,6 +139,41 @@ function handleSuggestion(question) {
   sendMessage(question)
 }
 
+async function loadSuggestedQuestions(force = false) {
+  if (!store.chatEnabled || !store.canUseAnalyzedContext) {
+    suggestedQuestions.value = []
+    return
+  }
+  const effectiveRepoUrl = store.currentRepoUrl || store.repoUrl
+  if (!store.sessionId && !effectiveRepoUrl.trim()) {
+    suggestedQuestions.value = []
+    return
+  }
+
+  suggestionsLoading.value = true
+  try {
+    const response = await fetchSuggestedQuestions({
+      session_id: store.sessionId || undefined,
+      repo_url: effectiveRepoUrl || undefined,
+      language: store.language,
+      force
+    })
+    if (response?.status === 'success' && Array.isArray(response.data?.questions)) {
+      suggestedQuestions.value = response.data.questions
+        .map(item => String(item || '').trim())
+        .filter(Boolean)
+        .slice(0, 3)
+      return
+    }
+    suggestedQuestions.value = []
+  } catch (e) {
+    console.error('loadSuggestedQuestions failed:', e)
+    suggestedQuestions.value = []
+  } finally {
+    suggestionsLoading.value = false
+  }
+}
+
 watch(
   () => store.chatMessages,
   async () => {
@@ -143,6 +183,14 @@ watch(
     }
   },
   { deep: true }
+)
+
+watch(
+  () => [store.sessionId, store.currentRepoUrl, store.language, store.chatEnabled, store.canUseAnalyzedContext],
+  async () => {
+    await loadSuggestedQuestions()
+  },
+  { immediate: true }
 )
 </script>
 
@@ -289,6 +337,34 @@ watch(
   margin-bottom: 0;
 }
 
+.assistant-text :deep(code) {
+  background: var(--code-inline-bg);
+  color: var(--code-inline-color);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9em;
+  border: 1px solid #bae6fd;
+}
+
+.assistant-text :deep(pre) {
+  background: var(--code-block-bg);
+  padding: 20px;
+  border-radius: 8px;
+  border: 1px solid var(--code-block-border);
+  border-left: 4px solid var(--primary-color);
+  overflow-x: auto;
+  margin: 1.2em 0;
+}
+
+.assistant-text :deep(pre code) {
+  background: none;
+  color: inherit;
+  padding: 0;
+  border: none;
+  font-size: 14px;
+}
+
 .suggestions {
   width: 100%;
   padding: 0 16px 8px;
@@ -301,6 +377,10 @@ watch(
   font-size: 12px;
   font-weight: 500;
   color: #a8a29e;
+}
+
+.suggestions p.loading {
+  color: #78716c;
 }
 
 .suggestions button {

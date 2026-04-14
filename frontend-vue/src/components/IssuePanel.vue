@@ -39,22 +39,33 @@ const { fetchIssues, loadIssuesSnapshot } = useInsights()
 const parsedHtml = computed(() => (store.issueNotes ? renderMarkdownSafe(store.issueNotes) : ''))
 const canRefresh = computed(() => Boolean(store.repoUrl.trim()) && !store.isIssueStreaming)
 
-function generateIssues() {
-  fetchIssues({ force: true })
+async function generateIssues() {
+  await fetchIssues({ force: true })
 }
 
-function refreshIssues() {
-  fetchIssues({ force: true })
+async function refreshIssues() {
+  await fetchIssues({ force: true })
 }
 
 watch(
-  () => [store.sessionId, store.language],
-  () => {
+  () => [store.sessionId, store.language, store.repoUrl],
+  async () => {
     if (store.isIssueStreaming) return
     if (!store.repoUrl.trim()) return
-    loadIssuesSnapshot()
+    await loadIssuesSnapshot()
   },
   { immediate: true }
+)
+
+watch(
+  () => store.activeInsightTab,
+  async (tab) => {
+    if (tab !== 'issues') return
+    if (store.isIssueStreaming) return
+    if (store.issueNotes) return
+    if (!store.repoUrl.trim()) return
+    await loadIssuesSnapshot()
+  }
 )
 </script>
 

@@ -106,3 +106,12 @@ export async function streamPaperAlign(payload, signal) {
     signal
   })
 }
+
+export async function fetchSuggestedQuestions(payload = {}) {
+  const response = await fetch(`${API_BASE}/api/chat/suggested-questions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  return await response.json()
+}

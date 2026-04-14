@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 from app.services.agent_service import agent_stream
 from app.services.chat_service import process_chat_stream, get_eval_data, clear_eval_data
 from app.services.insights_service import issue_summary_stream, commit_roadmap_stream
+from app.services.chat_questions_service import get_suggested_questions
 from app.services.vector_service import store_manager
 from app.services.auto_evaluation_service import (
     init_auto_evaluation_service,
@@ -464,6 +465,37 @@ async def repo_artifacts(
         "generated_at": generated_at,
         "available_languages": available_languages,
     })
+
+
+@app.post("/api/chat/suggested-questions")
+async def chat_suggested_questions(request: Request):
+    """返回仓库相关的三条推荐问题（宏观/实现/复现），支持缓存复用。"""
+    try:
+        data = await _parse_json_body(request)
+    except ValueError as e:
+        return _unified_error("INVALID_ARGUMENT", str(e))
+
+    session_id = data.get("session_id")
+    repo_url = (data.get("repo_url") or data.get("url") or "").strip() or None
+    language = "zh" if data.get("language") == "zh" else "en"
+    force = bool(data.get("force", False))
+
+    if not session_id and not repo_url:
+        return _unified_error("INVALID_ARGUMENT", "session_id or repo_url is required")
+
+    try:
+        questions, cache_hit = await get_suggested_questions(
+            session_id=session_id,
+            repo_url=repo_url,
+            language=language,
+            force=force,
+        )
+        return _unified_success({"questions": questions, "cache_hit": cache_hit})
+    except ValueError as e:
+        return _unified_error("INVALID_ARGUMENT", str(e))
+    except Exception as e:
+        logger.exception("chat suggested questions failed")
+        return _unified_error("INTERNAL", str(e), status_code=500)
 
 
 @app.post("/chat")

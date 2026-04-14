@@ -87,14 +87,21 @@ export function useInsights() {
     }
   }
 
-  function fetchIssues(options = {}) {
+  async function fetchIssues(options = {}) {
     const force = Boolean(options?.force)
     if (!store.repoUrl.trim()) {
       store.addLog('ℹ️ Enter a repository URL before fetching issues.', '#f59e0b')
       return
     }
     if (store.isIssueStreaming) return
-    if (!force && store.issueNotes) return
+    if (!force) {
+      if (store.issueNotes) return
+      const cached = await loadIssuesSnapshot()
+      if (cached) {
+        store.addLog('📦 Loaded issue summary from cache.', '#15803d')
+        return
+      }
+    }
 
     store.issueNotes = ''
     store.isIssueStreaming = true
@@ -136,14 +143,21 @@ export function useInsights() {
     }
   }
 
-  function fetchRoadmap(options = {}) {
+  async function fetchRoadmap(options = {}) {
     const force = Boolean(options?.force)
     if (!store.repoUrl.trim()) {
       store.addLog('ℹ️ Enter a repository URL before generating roadmap.', '#f59e0b')
       return
     }
     if (store.isRoadmapStreaming) return
-    if (!force && store.roadmapContent) return
+    if (!force) {
+      if (store.roadmapContent) return
+      const cached = await loadRoadmapSnapshot()
+      if (cached) {
+        store.addLog('📦 Loaded commit roadmap from cache.', '#15803d')
+        return
+      }
+    }
 
     resetRoadmapBuffer()
     store.roadmapContent = ''

@@ -20,6 +20,7 @@ from app.services.vector_service import store_manager
 from app.utils.session import generate_repo_session_id
 
 logger = logging.getLogger(__name__)
+ROADMAP_COMMIT_LIMIT = 10
 
 
 def _resolve_session(session_id: Optional[str], repo_url: str) -> str:
@@ -170,7 +171,8 @@ async def issue_summary_stream(
 
 def _build_roadmap_prompt(commits: List[GitHubCommit], language: str) -> str:
     """将 Commit 列表格式化成 LLM prompt 输入（按时间正序）"""
-    sorted_commits = list(reversed(commits))
+    latest_commits = commits[:ROADMAP_COMMIT_LIMIT]
+    sorted_commits = list(reversed(latest_commits))
     commit_lines: list[str] = []
     for c in sorted_commits:
         first_line = c.message.split("\n", 1)[0]
@@ -208,6 +210,8 @@ Group sections by month (or by week if all commits fall in the same month). Sect
    - What major features were shipped
    - The overall development velocity and focus areas
    - Any notable trends (e.g. heavy refactoring, bug-fix sprint, new module)
+
+Use only the provided commits below as evidence (latest {len(latest_commits)}, max 10). Do not invent extra events.
 
 ## Commits
 {commits_text}
@@ -259,9 +263,10 @@ async def commit_roadmap_stream(
             })
             return
 
+        used_commit_count = min(len(commits), ROADMAP_COMMIT_LIMIT)
         yield json.dumps({
             "step": "fetching",
-            "message": f"Fetched {len(commits)} commits. Generating roadmap..."
+            "message": f"Fetched {len(commits)} commits, using latest {used_commit_count}. Generating roadmap..."
         })
 
         prompt = _build_roadmap_prompt(commits, language)
