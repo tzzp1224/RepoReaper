@@ -382,7 +382,9 @@ async def _agent_stream_inner(
                                     "file": meta["file"],
                                     "type": meta["type"],
                                     "name": meta.get("name", ""),
-                                    "class": meta.get("class") or ""
+                                    "class": meta.get("class") or "",
+                                    "start_line": meta.get("start_line"),
+                                    "end_line": meta.get("end_line"),
                                 })
                             if documents:
                                 try:

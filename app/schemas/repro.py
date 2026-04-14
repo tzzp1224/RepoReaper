@@ -102,6 +102,7 @@ class AlignmentItem:
     matched_files: List[str] = field(default_factory=list)
     matched_symbols: List[str] = field(default_factory=list)
     evidence_excerpt: str = ""
+    evidence_spans: List[dict] = field(default_factory=list)
     debug_info: Optional[dict] = None
 
 
@@ -128,6 +129,7 @@ class PaperAlignResult:
                     "matched_files": a.matched_files,
                     "matched_symbols": a.matched_symbols,
                     "evidence_excerpt": a.evidence_excerpt,
+                    "evidence_spans": a.evidence_spans,
                     "debug_info": a.debug_info,
                 }
                 for a in self.alignment_items

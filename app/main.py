@@ -294,9 +294,12 @@ async def repro_score(request: Request):
 
 
 @app.post("/api/paper/align")
-async def paper_align(request: Request):
+async def paper_align(request: Request, stream: bool = False):
     """§3.3 论文-代码对齐"""
-    from app.services.paper_align_service import compute_paper_alignment
+    from app.services.paper_align_service import (
+        compute_paper_alignment,
+        compute_paper_alignment_stream,
+    )
 
     try:
         data = await _parse_json_body(request)
@@ -312,10 +315,22 @@ async def paper_align(request: Request):
         return _unified_error("INVALID_ARGUMENT", "paper_text is required")
     if not session_id and not repo_url:
         return _unified_error("INVALID_ARGUMENT", "session_id or repo_url is required")
-    if not isinstance(top_k, int) or not (1 <= top_k <= 20):
+    if not isinstance(top_k, int) or not (1 <= top_k <= 10):
         top_k = 5
 
     try:
+        if stream:
+            async def _stream_events():
+                async for event in compute_paper_alignment_stream(
+                    paper_text=paper_text,
+                    session_id=session_id,
+                    repo_url=repo_url,
+                    top_k=top_k,
+                ):
+                    yield json.dumps(event, ensure_ascii=False) + "\n"
+
+            return StreamingResponse(_stream_events(), media_type="text/plain")
+
         result = await compute_paper_alignment(
             paper_text=paper_text,
             session_id=session_id,

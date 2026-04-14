@@ -18,7 +18,7 @@
 
       <label class="topk-shell">
         <span>Top K</span>
-        <input v-model.number="store.paperAlignTopK" type="number" min="1" max="20" />
+        <input v-model.number="store.paperAlignTopK" type="number" min="1" max="10" />
       </label>
     </div>
 
@@ -188,6 +188,25 @@ Recommended: Abstract + Methods + Implementation Details"
         </div>
 
         <div class="results-scroll">
+          <div v-if="diagnostics.length" class="diagnostics-shell">
+            <button
+              type="button"
+              class="details-toggle diagnostics-toggle"
+              @click="toggleDiagnostics"
+            >
+              {{ diagnosticsOpen ? 'Hide diagnostics' : 'Show diagnostics' }} ({{ diagnostics.length }})
+            </button>
+            <div v-if="diagnosticsOpen" class="diagnostics-list">
+              <div
+                v-for="(event, index) in diagnostics"
+                :key="`diag-${index}`"
+                class="diagnostic-item"
+              >
+                {{ formatDiagnostic(event) }}
+              </div>
+            </div>
+          </div>
+
           <div v-if="store.paperAlignLoading" class="results-state">Running alignment...</div>
           <div v-else-if="store.paperAlignError" class="results-state error">{{ store.paperAlignError }}</div>
           <div v-else-if="!store.paperAlignResult" class="results-state">
@@ -227,6 +246,19 @@ Recommended: Abstract + Methods + Implementation Details"
                     <strong>Matched Symbols</strong>
                     <div class="chip-row">
                       <span v-for="symbol in item.matched_symbols" :key="symbol" class="chip">{{ symbol }}</span>
+                    </div>
+                  </div>
+
+                  <div v-if="item.evidence_spans?.length" class="result-block">
+                    <strong>Evidence Spans</strong>
+                    <div class="span-list">
+                      <div v-for="(span, spanIndex) in item.evidence_spans" :key="`span-${spanIndex}`" class="span-card">
+                        <div class="span-meta">
+                          <span>{{ span.file || 'unknown file' }}</span>
+                          <span v-if="span.start_line">:{{ span.start_line }}<template v-if="span.end_line && span.end_line !== span.start_line">-{{ span.end_line }}</template></span>
+                        </div>
+                        <pre>{{ span.snippet }}</pre>
+                      </div>
                     </div>
                   </div>
 
@@ -276,6 +308,7 @@ const textViewRef = ref(null)
 const paperContentRef = ref(null)
 const paperLeftPaneWidth = ref(0)
 const expandedClaims = ref({})
+const diagnosticsOpen = ref(true)
 const uploadingFile = ref(false)
 const fileError = ref('')
 const inputMode = ref('text')  // 'text' | 'pdf'
@@ -294,10 +327,11 @@ const gridStyle = computed(() => ({
 
 const resultItems = computed(() => store.paperAlignResult?.alignment_items || [])
 const missingClaims = computed(() => store.paperAlignResult?.missing_claims || [])
+const diagnostics = computed(() => store.paperAlignDiagnostics || [])
 const alignedCount = computed(() => resultItems.value.filter(item => item.status === 'aligned').length)
 const partialCount = computed(() => resultItems.value.filter(item => item.status === 'partial').length)
 const missingCount = computed(() => {
-  const inlineMissing = resultItems.value.filter(item => item.status === 'missing').length
+  const inlineMissing = resultItems.value.filter(item => ['missing', 'insufficient_evidence'].includes(item.status)).length
   return inlineMissing + missingClaims.value.length
 })
 const confidencePercent = computed(() => {
@@ -474,12 +508,27 @@ function isClaimExpanded(index) {
 }
 
 function hasResultDetails(item) {
-  return Boolean(item.matched_files?.length || item.matched_symbols?.length || item.evidence_excerpt)
+  return Boolean(item.matched_files?.length || item.matched_symbols?.length || item.evidence_excerpt || item.evidence_spans?.length)
 }
 
 function formatStatus(status) {
   if (!status) return 'Unknown'
+  if (status === 'insufficient_evidence') return 'Missing'
   return status.charAt(0).toUpperCase() + status.slice(1)
+}
+
+function toggleDiagnostics() {
+  diagnosticsOpen.value = !diagnosticsOpen.value
+}
+
+function formatDiagnostic(event) {
+  if (!event || typeof event !== 'object') return ''
+  const ts = event.timestamp ? `[${event.timestamp}] ` : ''
+  const message = event.message || event.stage || event.type || 'event'
+  if (event.type === 'judge' && event.claim) {
+    return `${ts}${message}: ${event.display_status || event.status} | ${event.claim}`
+  }
+  return `${ts}${message}`
 }
 
 onMounted(() => {
@@ -901,6 +950,37 @@ onUnmounted(() => {
   overflow: auto;
 }
 
+.diagnostics-shell {
+  margin: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: #fff;
+  padding: 12px;
+}
+
+.diagnostics-toggle {
+  margin-top: 0;
+}
+
+.diagnostics-list {
+  margin-top: 10px;
+  max-height: 220px;
+  overflow: auto;
+  border-top: 1px dashed var(--border-color);
+  padding-top: 8px;
+}
+
+.diagnostic-item {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  color: #57534e;
+  line-height: 1.55;
+}
+
+.diagnostic-item + .diagnostic-item {
+  margin-top: 6px;
+}
+
 .confidence-block {
   flex-shrink: 0;
 }
@@ -1058,6 +1138,39 @@ blockquote {
   border: 1px solid var(--border-color);
   font-size: 12px;
   line-height: 1.7;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.span-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.span-card {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #fafaf9;
+  padding: 8px;
+}
+
+.span-meta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #78716c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.span-card pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #44403c;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 

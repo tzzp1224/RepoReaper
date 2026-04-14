@@ -360,6 +360,8 @@ class UniversalChunker:
         return chunks
 
     def _create_chunk(self, content, file_path, type_, name, start_line, class_name=""):
+        line_count = content.count('\n') + 1 if content else 1
+        end_line = max(start_line, start_line + line_count - 1)
         return {
             "content": content,
             "metadata": {
@@ -367,6 +369,7 @@ class UniversalChunker:
                 "type": type_,
                 "name": name,
                 "start_line": start_line,
+                "end_line": end_line,
                 "class": class_name
             }
         }

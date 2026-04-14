@@ -72,6 +72,7 @@ export const useAppStore = defineStore('app', () => {
   const paperAlignResult = ref(null)
   const paperAlignLoading = ref(false)
   const paperAlignError = ref('')
+  const paperAlignDiagnostics = ref([])
   const paperUploadedFileName = ref('')
   const paperHighlightMode = ref(false)
   const paperHighlights = ref([])
@@ -195,6 +196,7 @@ export const useAppStore = defineStore('app', () => {
     paperAlignResult.value = null
     paperAlignLoading.value = false
     paperAlignError.value = ''
+    paperAlignDiagnostics.value = []
     paperUploadedFileName.value = ''
     paperHighlightMode.value = false
     paperHighlights.value = []
@@ -206,6 +208,18 @@ export const useAppStore = defineStore('app', () => {
 
   function setPaperUploadedFileName(name) {
     paperUploadedFileName.value = name || ''
+  }
+
+  function resetPaperAlignDiagnostics() {
+    paperAlignDiagnostics.value = []
+  }
+
+  function addPaperAlignDiagnostic(event) {
+    if (!event || typeof event !== 'object') return
+    paperAlignDiagnostics.value.push(event)
+    if (paperAlignDiagnostics.value.length > 500) {
+      paperAlignDiagnostics.value = paperAlignDiagnostics.value.slice(-500)
+    }
   }
 
   function setPaperHighlightMode(enabled) {
@@ -368,6 +382,7 @@ export const useAppStore = defineStore('app', () => {
     paperAlignResult,
     paperAlignLoading,
     paperAlignError,
+    paperAlignDiagnostics,
     paperUploadedFileName,
     paperHighlightMode,
     paperHighlights,
@@ -399,6 +414,8 @@ export const useAppStore = defineStore('app', () => {
     resetInsightsState,
     resetScoreState,
     resetPaperAlignState,
+    resetPaperAlignDiagnostics,
+    addPaperAlignDiagnostic,
     setPaperUploadedFileName,
     setPaperHighlightMode,
     setPaperHighlights,

@@ -551,13 +551,20 @@ class TestComputePaperAlignment:
 
         if d["alignment_items"]:
             item = d["alignment_items"][0]
-            assert set(item.keys()) == {
-                "claim", "status", "matched_files", "matched_symbols", "evidence_excerpt",
-            }
+            assert "claim" in item
+            assert "status" in item
+            assert "matched_files" in item
+            assert "matched_symbols" in item
+            assert "evidence_excerpt" in item
+            assert "evidence_spans" in item
+            assert "debug_info" in item
 
         if d["missing_claims"]:
             mc = d["missing_claims"][0]
-            assert set(mc.keys()) == {"claim", "reason"}
+            assert "claim" in mc
+            assert "reason" in mc
+            assert "status" in mc
+            assert "debug_info" in mc
 
     def test_confidence_calculation(self):
         from app.services.paper_align_service import compute_paper_alignment

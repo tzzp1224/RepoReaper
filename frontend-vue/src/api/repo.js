@@ -97,3 +97,12 @@ export async function fetchPaperAlign(payload) {
   })
   return await response.json()
 }
+
+export async function streamPaperAlign(payload, signal) {
+  return fetch(`${API_BASE}/api/paper/align?stream=true`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal
+  })
+}
