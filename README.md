@@ -1,222 +1,117 @@
 <div align="center">
-
-  <img src="./docs/logo.jpg" width="800" style="max-width: 100%;" height="auto" alt="RepoReaper Logo">
+  <img src="./docs/logo.jpg" width="800" style="max-width: 100%;" alt="RepoReaper Logo" />
 
   <h1>RepoReaper</h1>
-
-  <h3>💀 Harvest Logic. Dissect Architecture. Chat with Code.</h3>
+  <p><b>Harvest Logic. Dissect Architecture. Chat with Code.</b></p>
 
   <p>
-    <a href="./README.md">English</a> • 
+    <a href="./README.md">English</a> •
     <a href="./README_zh.md">简体中文</a>
   </p>
 
-  <a href="./LICENSE">
-    <img src="https://img.shields.io/github/license/tzzp1224/RepoReaper?style=flat-square&color=blue" alt="License">
-  </a>
-  <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python Version">
-  <img src="https://img.shields.io/badge/Model-DeepSeek_V3-673AB7?style=flat-square&logo=openai&logoColor=white" alt="DeepSeek Powered">
-  <img src="https://img.shields.io/badge/Agent-ReAct-orange?style=flat-square" alt="Agent Architecture">
-
-  <br>
-
-  <img src="https://img.shields.io/badge/RAG-Hybrid_Search-009688?style=flat-square" alt="RAG">
-  <img src="https://img.shields.io/badge/VectorDB-Qdrant-important?style=flat-square" alt="Qdrant">
-  <img src="https://img.shields.io/badge/Framework-FastAPI-005571?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
-  <img src="https://img.shields.io/badge/Frontend-Vue_3-4FC08D?style=flat-square&logo=vue.js&logoColor=white" alt="Vue 3">
-  <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
-
-  <br>
-  <br>
+  <p>
+    <img src="https://img.shields.io/github/license/tzzp1224/RepoReaper?style=flat-square&color=blue" alt="License" />
+    <img src="https://img.shields.io/badge/Python-3.10--3.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python" />
+    <img src="https://img.shields.io/badge/Backend-FastAPI-005571?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI" />
+    <img src="https://img.shields.io/badge/Frontend-Vue_3-4FC08D?style=flat-square&logo=vue.js&logoColor=white" alt="Vue 3" />
+    <img src="https://img.shields.io/badge/Search-Qdrant+BM25-009688?style=flat-square" alt="Hybrid Search" />
+  </p>
 
   <p>
-    <b>👇 Live Demo / 在线体验 👇</b>
-  </p>
-  <p align="center">
     <a href="https://realdexter-reporeaper.hf.space" target="_blank" rel="noopener noreferrer">
-      <img src="https://img.shields.io/badge/🤗%20Hugging%20Face-Global%20Demo-ffd21e?style=for-the-badge&logo=huggingface&logoColor=black" alt="Global Demo" height="45">
+      <img src="https://img.shields.io/badge/🤗%20Hugging%20Face-Global%20Demo-ffd21e?style=for-the-badge&logo=huggingface&logoColor=black" alt="Global Demo" height="42" />
     </a>
-    &nbsp;&nbsp;&nbsp;
     <a href="https://repo.realdexter.com/" target="_blank" rel="noopener noreferrer">
-      <img src="https://img.shields.io/badge/🚀%20Seoul%20Server-CN%20Optimized-red?style=for-the-badge&logo=rocket&logoColor=white" alt="China Demo" height="45">
+      <img src="https://img.shields.io/badge/🚀%20Seoul%20Server-CN%20Optimized-red?style=for-the-badge&logo=rocket&logoColor=white" alt="Seoul Demo" height="42" />
     </a>
   </p>
 
-  <p align="center">
-    <small>
-      ⚠️ Public demos use shared API quotas. Deploy locally for the best experience.
-    </small>
-  </p>
-
-  <br>
-
-  <img src="./docs/demo_preview.gif" width="800" style="max-width: 100%; box-shadow: 0 4px 8px rgba(0,0,0,0.1); border-radius: 8px;" alt="RepoReaper Demo">
-
-  <br>
+  <img src="./docs/demo_preview.gif" width="800" style="max-width: 100%; border-radius: 8px;" alt="RepoReaper Demo" />
 </div>
 
----
+RepoReaper is an evidence-grounded repository intelligence agent for engineers, reviewers, and researchers who need to understand unfamiliar codebases quickly. It turns a GitHub repository into a reusable investigation workspace, so follow-up questions and verification stay anchored to the same context. Instead of a one-shot summary, you get a persistent workflow for analysis, chat, reproducibility checks, and paper-to-code validation.
 
-An autonomous Agent that dissects any GitHub repository. It maps code architecture, warms up semantic cache, and answers questions with Just-In-Time context retrieval.
+## Why RepoReaper
+- **Evidence-grounded by default**: answers and judgments are tied to retrievable repository evidence, not free-form summaries.
+- **Reusable workspace, not one-shot output**: each repository maps to a persistent session with reusable context, reports, and artifacts.
+- **Retrieval built for hard questions**: vector search + BM25 + RRF + query rewrite + JIT file loading recover missing evidence when first-pass context is thin.
+- **Verification and inspectability built in**: Reproducibility Score, Paper Align, and white-box tracing make conclusions reviewable.
 
----
+## What You Get
+- A repository-scoped analysis workspace with reusable session state, indexed context, and generated artifacts.
+- Repo chat for architecture exploration and implementation-level Q&A inside the same repository session.
+- **Issues Notebook** and **Commit Roadmap** for two complementary views: community pressure and delivery direction.
+- **Reproducibility Score** with structured risks, evidence references, and localized summary output.
+- **Paper Align** outputs with claim-level verdicts: `aligned`, `partial`, `missing`, and `insufficient_evidence`.
+- **Suggested Questions** with three anchored follow-ups: architecture, implementation, and reproduction path.
+- Streaming output across analysis, insights, chat, and alignment so users can inspect progress before completion.
 
-## ✨ Key Features
+## Practical Use Cases
+| Scenario | Outcome |
+| :-- | :-- |
+| Onboarding to a new repository | Analyze once, then reuse bilingual reports and indexed context for later deep dives. |
+| Investigating implementation details | Chat rewrites the query, retrieves relevant chunks, and uses JIT file loading when first-pass evidence is insufficient. |
+| Reviewing project trajectory | Issues Notebook and Commit Roadmap reveal maintenance pressure and delivery direction in parallel. |
+| Preparing a reproducibility handoff | Reproducibility Score provides structured risks, evidence references, and localized summary output. |
+| Verifying paper claims against code | Paper Align checks claims against code evidence and surfaces missing or partial support with stream diagnostics. |
+| Planning next questions | Suggested Questions proposes three anchored follow-ups for architecture, implementation, and reproduction. |
 
-| Feature | Description |
-|:--------|:------------|
-| **Multi-Language AST Parsing** | Python AST + Regex patterns for Java, TypeScript, Go, Rust, etc. |
-| **Hybrid Search** | Qdrant vectors + BM25 with RRF fusion |
-| **JIT Context Loading** | Auto-fetches missing files during Q&A |
-| **Query Rewrite** | Translates natural language to code keywords |
-| **End-to-End Tracing** | Langfuse integration for observability |
-| **Auto Evaluation** | LLM-as-Judge scoring pipeline |
+## How RepoReaper Works
+- **Session-centered state model**: each repository maps to a stable session, and analysis context, reports, and artifacts are reused across visits.
+- **Layered retrieval pipeline**: vector search and BM25 are fused by RRF, then query rewrite and JIT file loading recover missing evidence for complex questions.
+- **Streaming-first execution**: analysis, insights, chat, and alignment emit incremental output so users can inspect progress before full completion.
+- **Explicit cache hierarchy**: issues/roadmap/questions artifacts and split reproducibility caches (`core` + localized) reduce repeat latency while preserving refresh control.
+- **Concurrency-safe writes**: repository-level locks with `memory` / `file` / `redis` backends prevent conflicting writes on the same session.
+- **Provider-pluggable inference layer**: model provider is configurable (`openai`, `deepseek`, `anthropic`, `gemini`) without changing workflow semantics.
 
----
+## Observability and Quality Loop
+- **Traceable request path**: tracing is attached to core chat sessions, so investigation steps remain inspectable instead of opaque.
+- **Non-blocking evaluation**: auto-evaluation runs in async sidecar mode, separating answer latency from scoring latency.
+- **Reviewable quality control**: suspicious evaluation samples enter a review queue with stable approve/reject actions.
+- **Operational visibility**: runtime metrics and evaluation stats expose queue state, score distribution, and failure surfaces.
+- **Fail-open behavior**: observability and evaluation failures do not block the primary analysis and chat workflow.
 
-## 🏗 Architecture
+## Paper Align in Review Work
+- **Claim extraction**: paper text is decomposed into verifiable technical claims.
+- **Evidence retrieval per claim**: each claim is expanded into retrieval-friendly queries and matched against repository snippets.
+- **Explicit judgment states**: outputs separate `aligned`, `partial`, `missing`, and `insufficient_evidence`, with evidence excerpts.
+- **JIT fallback for hard claims**: when evidence is weak, candidate files are fetched/indexed on demand and judged again.
+- **Streaming diagnostics**: claim progress, retrieval traces, fallback actions, and final confidence are emitted as inspectable events.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Vue 3 Frontend (SSE Streaming + Mermaid Diagrams)          │
-└─────────────────────┬───────────────────────────────────────┘
-                      │
-┌─────────────────────▼───────────────────────────────────────┐
-│  FastAPI Backend                                            │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐   │
-│  │ Agent       │ │ Chat        │ │ Evaluation          │   │
-│  │ Service     │ │ Service     │ │ Framework           │   │
-│  └──────┬──────┘ └──────┬──────┘ └─────────────────────┘   │
-│         │               │                                   │
-│  ┌──────▼───────────────▼──────┐  ┌─────────────────────┐  │
-│  │ Vector Service (Qdrant+BM25)│  │ Tracing (Langfuse)  │  │
-│  └─────────────────────────────┘  └─────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🛠 Tech Stack
-
-**Backend:** Python 3.10+ · FastAPI · AsyncIO · Qdrant · BM25  
-**Frontend:** Vue 3 · Pinia · Mermaid.js · SSE  
-**LLM:** DeepSeek V3 · SiliconFlow BGE-M3  
-**Ops:** Docker · Gunicorn · Langfuse
-
----
-
-## 🏁 Quick Start
-
-**Prerequisites:** Python 3.10+ · (Optional) Node 18+ for rebuilding frontend · GitHub Token (recommended) · LLM API Key (required)
+## Quick Start
+### Local (fastest path)
+Prerequisites: Python `3.10-3.12`, one LLM API key (required), `GITHUB_TOKEN` (recommended), embedding key (recommended for retrieval quality).
 
 ```bash
-# Clone & Setup
-git clone https://github.com/tzzp1224/RepoReaper.git && cd RepoReaper
-python -m venv venv && source venv/bin/activate
+git clone https://github.com/tzzp1224/RepoReaper.git
+cd RepoReaper
+
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 
-# Configure .env (copy from example and fill in your keys)
 cp .env.example .env
-# Required: set LLM_PROVIDER and the matching *_API_KEY
-# Recommended: GITHUB_TOKEN and SILICON_API_KEY (embeddings)
+# Required: LLM_PROVIDER + matching API key
+# Supported providers: openai | deepseek | anthropic | gemini
+# Recommended: GITHUB_TOKEN and SILICON_API_KEY
+# Optional: LANGFUSE_ENABLED=true with Langfuse keys
 
-# Langfuse configuration：
-# LANGFUSE_ENABLED=true
-# LANGFUSE_HOST=http://langfuse-web:3000  #if you run RepoReaper in docker
-# LANGFUSE_HOST=http://localhost:3000  #if you run RepoReaper locally
-# LANGFUSE_PUBLIC_KEY=<your public key>
-# LANGFUSE_SECRET_KEY=<your secret key>
-
-# (Optional) Build frontend (repo already contains frontend-dist)
-cd frontend-vue
-npm install
-npm run build
-cd ..
-
-# Run
-python -m app.main
+python3 -m app.main
 ```
 
-Open `http://localhost:8000` and paste any GitHub repo URL.
+Open [http://localhost:8000](http://localhost:8000).
 
-**Docker (single container, local Qdrant):**
+### Docker Compose (App + Qdrant)
 ```bash
 cp .env.example .env
-docker build -t reporeaper .
-docker run -d -p 8000:8000 --env-file .env reporeaper
-```
-
-**Docker Compose (recommended, with Qdrant Server):**
-```bash
-cp .env.example .env
-# Set QDRANT_MODE=server and QDRANT_URL=http://qdrant:6333 in .env
 docker compose up -d --build
 ```
-**Docker Compose + Langfuse (recommended single command):**
+
+### Optional Observability Stack (Langfuse)
 ```bash
-cp .env.example .env
 docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
 ```
 
-**Using Langfuse stack only:**
-```bash
-docker compose -f docker-compose.observability.yml up -d --build
-```
-
-
-
-
-
-## 📊 Evaluation & Tracing Status
-
-| Component | Status | Notes |
-|:----------|:------:|:------|
-| **Online Auto-Eval Pipeline** | ✅ Working | `/chat` → async sidecar → generation eval → tier routing |
-| **Human Review Gate** | ✅ Working | `sample_id`-based approve/reject with persistent queue and idempotent decisions |
-| **Langfuse Observability** | ✅ Working | End-to-end trace + score reporting (`final/custom/ragas/tier`) |
-| **Offline Retrieval Benchmark** | ⚠️ Partial | Script works, but depends on pre-indexed vector store and limited golden labels |
-| **Golden Dataset Quality** | ⚠️ Improving | 63 samples, `expected_answer` filled, bilingual (`zh/en`); coverage breadth is being expanded |
-| **Ragas Integration** | ✅ Implemented | Dataset-based API path with sampling/timeout/circuit breaker |
-| **Runtime Contract Cleanup** | ✅ Completed | Runtime path is generation-focused; dead eval imports/DPO runtime placeholders removed, canonical score-tier thresholds centralized, dedupe eviction deterministic, startup no longer preloads golden dataset, Langfuse score path uses deterministic `create_score` fallback and graceful tracing shutdown |
-
----
-
-Golden dataset quick check:
-```bash
-python evaluation/golden_dataset_builder.py validate --strict
-```
-
-## ⚠️ Known Issues
-
-1. **Python 3.14 + Langfuse import error**  
-   `pydantic.V1.errors.ConfigError: unable to infer type for attribute "description"` — Langfuse 3.x internally uses `pydantic.v1` compat layer which breaks on Python 3.14.  
-   **Workaround:** set `LANGFUSE_ENABLED=false` in `.env`, or use Python 3.10–3.12.
-
-2. **Langfuse Server not included in `docker-compose.yml`**  
-   Even if the import works, you need a running Langfuse instance. Add it yourself or use [app.langfuse.com](https://app.langfuse.com).
-
----
-
-## 🗺 Evaluation Roadmap (Canonical)
-
-- [x] **Phase 0 - Async sidecar + quality gate**: non-blocking auto-eval, queue backpressure, input filtering, review-before-route.
-- [x] **Phase 1 - Trace continuity**: `/chat` + `/analyze` + worker trace propagation with fail-open tracing.
-- [x] **Phase 2 - Score observability**: Langfuse Scores reporting for `final/custom/ragas(optional)/quality_tier`.
-- [x] **Phase 3 - Contract cleanup (required first)**: keep online runtime focused on generation eval only, move or remove unused runtime artifacts (DPO placeholders, dead imports, unused runtime symbols), and define one canonical threshold map; DoD: runtime path has no dead eval symbols.
-- [x] **Phase 4 - Ragas modernization (code path)**: `_ragas_eval()` migrated to Dataset-based API with timeout/sampling/CB and compatibility tests.
-- [x] **Phase 5 - Durable review workflow (code path)**: stable `sample_id` APIs, persistent review queue/decisions, idempotent approve/reject.
-- [ ] **Phase 6 - Golden dataset governance**: split retrieval vs generation benchmark sets, add reference answers and multilingual coverage, enforce validator checks in CI; DoD: benchmark set is complete enough for regression.
-- [ ] **Phase 7 - Regression pipeline in CI**: add offline eval command(s) with threshold gates and machine-readable reports; DoD: PRs fail on metric regression.
-- [ ] **Phase 8 - Langfuse dataset sync**: on approved samples, sync local JSONL + Langfuse Datasets/trace links in one flow; DoD: no dual-write drift.
-
----
-
-## 📈 Star History
-
-<a href="https://star-history.com/#tzzp1224/RepoReaper&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date" />
- </picture>
-</a>
+Compatibility note:
+- Recommended runtime: Python `3.10-3.12`.
+- Python `3.14` currently has known caveats in this repo (Langfuse SDK compatibility and some legacy asyncio test patterns).

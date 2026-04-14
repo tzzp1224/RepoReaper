@@ -1,219 +1,117 @@
-﻿<div align="center">
-
-  <img src="./docs/logo.jpg" width="800" style="max-width: 100%;" height="auto" alt="RepoReaper Logo">
+<div align="center">
+  <img src="./docs/logo.jpg" width="800" style="max-width: 100%;" alt="RepoReaper Logo" />
 
   <h1>RepoReaper</h1>
-
-  <h3>💀 Harvest Logic. Dissect Architecture. Chat with Code.</h3>
-
-  <p>
-    <a href="./README.md">English</a> • 
-    <strong>简体中文</strong>
-  </p>
-
-  <a href="./LICENSE">
-    <img src="https://img.shields.io/github/license/tzzp1224/RepoReaper?style=flat-square&color=blue" alt="License">
-  </a>
-  <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python Version">
-  <img src="https://img.shields.io/badge/Model-DeepSeek_V3-673AB7?style=flat-square&logo=openai&logoColor=white" alt="DeepSeek Powered">
-  <img src="https://img.shields.io/badge/Agent-ReAct-orange?style=flat-square" alt="Agent Architecture">
-
-  <br>
-
-  <img src="https://img.shields.io/badge/RAG-Hybrid_Search-009688?style=flat-square" alt="RAG">
-  <img src="https://img.shields.io/badge/VectorDB-Qdrant-important?style=flat-square" alt="Qdrant">
-  <img src="https://img.shields.io/badge/Framework-FastAPI-005571?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
-  <img src="https://img.shields.io/badge/Frontend-Vue_3-4FC08D?style=flat-square&logo=vue.js&logoColor=white" alt="Vue 3">
-  <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
-
-  <br>
-  <br>
+  <p><b>Harvest Logic. Dissect Architecture. Chat with Code.</b></p>
 
   <p>
-    <b>👇 在线体验 👇</b>
+    <a href="./README.md">English</a> •
+    <a href="./README_zh.md">简体中文</a>
   </p>
-  <p align="center">
+
+  <p>
+    <img src="https://img.shields.io/github/license/tzzp1224/RepoReaper?style=flat-square&color=blue" alt="License" />
+    <img src="https://img.shields.io/badge/Python-3.10--3.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python" />
+    <img src="https://img.shields.io/badge/Backend-FastAPI-005571?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI" />
+    <img src="https://img.shields.io/badge/Frontend-Vue_3-4FC08D?style=flat-square&logo=vue.js&logoColor=white" alt="Vue 3" />
+    <img src="https://img.shields.io/badge/Search-Qdrant+BM25-009688?style=flat-square" alt="Hybrid Search" />
+  </p>
+
+  <p>
     <a href="https://realdexter-reporeaper.hf.space" target="_blank" rel="noopener noreferrer">
-      <img src="https://img.shields.io/badge/🤗%20Hugging%20Face-Global%20Demo-ffd21e?style=for-the-badge&logo=huggingface&logoColor=black" alt="Global Demo" height="45">
+      <img src="https://img.shields.io/badge/🤗%20Hugging%20Face-Global%20Demo-ffd21e?style=for-the-badge&logo=huggingface&logoColor=black" alt="Global Demo" height="42" />
     </a>
-    &nbsp;&nbsp;&nbsp;
     <a href="https://repo.realdexter.com/" target="_blank" rel="noopener noreferrer">
-      <img src="https://img.shields.io/badge/🚀%20Seoul%20Server-国内优化-red?style=for-the-badge&logo=rocket&logoColor=white" alt="China Demo" height="45">
+      <img src="https://img.shields.io/badge/🚀%20Seoul%20Server-CN%20Optimized-red?style=for-the-badge&logo=rocket&logoColor=white" alt="Seoul Demo" height="42" />
     </a>
   </p>
 
-  <p align="center">
-    <small>
-      ⚠️ 中国用户请使用 Seoul Server。如遇限流，建议本地部署。
-    </small>
-  </p>
-
-  <br>
-
-  <img src="./docs/demo_preview.gif" width="800" style="max-width: 100%; box-shadow: 0 4px 8px rgba(0,0,0,0.1); border-radius: 8px;" alt="RepoReaper Demo">
-
-  <br>
+  <img src="./docs/demo_preview.gif" width="800" style="max-width: 100%; border-radius: 8px;" alt="RepoReaper Demo" />
 </div>
 
----
+RepoReaper 是一个面向 GitHub 仓库的证据化智能分析 Agent，服务于需要快速吃透陌生代码库的工程师、评审者和研究者。它会把仓库沉淀为可复用的调查工作台，让后续追问、评审和验证始终基于同一仓库上下文。它不是一次性总结工具，而是可持续复用的分析、问答、可复现评估与论文对齐工作流。
 
-自治型代码审计 Agent：解析任意 GitHub 仓库架构，构建语义缓存，支持即时上下文检索问答。
+## 为什么选择 RepoReaper
+- **先证据，后结论**：回答和判断都绑定可检索的仓库证据，而不是只给抽象总结。
+- **可复用工作台，而非一次性结果**：每个仓库对应持久会话，分析上下文、报告和 artifacts 可持续复用。
+- **为复杂问题设计的检索链路**：向量检索 + BM25 + RRF + 查询改写 + JIT 补文件，在首轮证据不足时继续补召。
+- **验证与可检查性内建**：Reproducibility Score、Paper Align 与白盒 tracing 让结论可追溯、可复核。
 
----
+## 你会得到什么
+- 一个以仓库为单位的分析工作台，包含可复用会话状态、索引上下文和分析产物。
+- 在同一会话中完成架构理解与实现细节追问的 Repo Chat。
+- **Issues Notebook** 与 **Commit Roadmap** 两条并行视图，分别观察社区压力与交付方向。
+- **Reproducibility Score**：结构化风险、证据引用与本地化摘要输出。
+- **Paper Align**：按 claim 输出 `aligned`、`partial`、`missing`、`insufficient_evidence` 判定。
+- **Suggested Questions**：返回三类锚定追问，覆盖架构、实现与复现路径。
+- 分析、洞察、问答、对齐全链路流式回传，无需等待全量完成再开始判断。
 
-## ✨ 核心特性
+## 实际使用场景
+| 场景 | 结果 |
+| :-- | :-- |
+| 新仓库接手与快速入门 | 分析一次后，持续复用中英报告与索引上下文。 |
+| 深入实现细节排查 | Chat 先改写问题并检索关键片段，证据不足时触发 JIT 补文件。 |
+| 项目节奏与维护状态审查 | Issues Notebook 与 Commit Roadmap 并行呈现维护压力和交付方向。 |
+| 可复现性交接评估 | Reproducibility Score 给出结构化风险、证据引用和本地化摘要。 |
+| 论文 claim 与代码实现核验 | Paper Align 对 claim 逐条比对代码证据，并流式暴露 partial/missing。 |
+| 规划下一步问题 | Suggested Questions 给出架构、实现、复现三类锚定追问。 |
 
-| 特性 | 说明 |
-|:----|:----|
-| **多语言 AST 解析** | Python AST + 正则适配 Java / TS / Go / Rust 等 |
-| **混合检索** | Qdrant 向量 + BM25 关键词，RRF 融合排序 |
-| **JIT 动态加载** | 问答时自动拉取缺失文件 |
-| **查询重写** | 自然语言 → 代码检索关键词 |
-| **端到端追踪** | Langfuse 集成，全链路可观测 |
-| **自动评估** | LLM-as-Judge 质量评分 |
+## RepoReaper 如何工作
+- **会话化状态模型**：每个仓库映射到稳定会话，分析上下文、报告和 artifacts 可跨访问复用。
+- **分层检索链路**：向量检索与 BM25 通过 RRF 融合，再结合查询改写与 JIT 补文件，提升复杂问题的证据召回。
+- **流式执行为默认**：分析、洞察、问答、对齐按阶段回传，用户可边看边判断。
+- **显式缓存层次**：issues/roadmap/questions 等产物可缓存复用；可复现评分采用 `core` 与 localized 分层缓存。
+- **并发写入可控**：仓库级锁支持 `memory` / `file` / `redis` 后端，避免同会话写冲突。
+- **模型层可插拔**：可在 `openai`、`deepseek`、`anthropic`、`gemini` 间切换，不改变工作流语义。
 
----
+## 可观测与质量闭环
+- **请求路径可追踪**：核心 chat 会话绑定 tracing，分析过程可检查而非黑箱。
+- **评估不阻塞主链路**：auto-eval 以 sidecar 异步执行，回答延迟与评分延迟解耦。
+- **质量判断可复核**：异常评估样本进入 review queue，支持稳定的 approve/reject 操作。
+- **运行态指标可见**：可观测指标与评估统计反映队列状态、分数分布和失败面。
+- **失败默认 fail-open**：观测或评估异常不会阻断主分析与问答流程。
 
-## 🏗 系统架构
+## Paper Align 在评审中的用法
+- **先拆 claim**：将论文文本拆解为可核验的技术 claims。
+- **逐 claim 证据检索**：每个 claim 扩展为检索友好查询，并与仓库片段匹配。
+- **判定结果有边界**：明确区分 `aligned`、`partial`、`missing`、`insufficient_evidence`，并给出证据摘录。
+- **困难样本可回退**：证据不足时触发候选文件 JIT 拉取与再判定，而不是直接终止。
+- **诊断过程可流式观察**：claim 进度、检索轨迹、回退动作与最终置信度都可被检查。
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Vue 3 前端 (SSE 流式 + Mermaid 架构图)                       │
-└─────────────────────┬───────────────────────────────────────┘
-                      │
-┌─────────────────────▼───────────────────────────────────────┐
-│  FastAPI 后端                                               │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐   │
-│  │ Agent       │ │ Chat        │ │ Evaluation          │   │
-│  │ Service     │ │ Service     │ │ Framework           │   │
-│  └──────┬──────┘ └──────┬──────┘ └─────────────────────┘   │
-│         │               │                                   │
-│  ┌──────▼───────────────▼──────┐  ┌─────────────────────┐  │
-│  │ Vector Service (Qdrant+BM25)│  │ Tracing (Langfuse)  │  │
-│  └─────────────────────────────┘  └─────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🛠 技术栈
-
-**后端:** Python 3.10+ · FastAPI · AsyncIO · Qdrant · BM25  
-**前端:** Vue 3 · Pinia · Mermaid.js · SSE  
-**模型:** DeepSeek V3 · SiliconFlow BGE-M3  
-**运维:** Docker · Gunicorn · Langfuse
-
----
-
-## 🏁 快速开始
-
-**前置要求:** Python 3.10+ ·（可选）Node 18+ 用于重新构建前端 · GitHub Token（推荐）· LLM API Key（必需）
+## 快速开始
+### 本地运行（最短路径）
+前置：Python `3.10-3.12`、至少一个 LLM API Key（必需）、`GITHUB_TOKEN`（推荐）、Embedding Key（推荐）。
 
 ```bash
-# 克隆 & 安装
-git clone https://github.com/tzzp1224/RepoReaper.git && cd RepoReaper
-python -m venv venv && source venv/bin/activate
+git clone https://github.com/tzzp1224/RepoReaper.git
+cd RepoReaper
+
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 
-# 配置 .env（建议从示例复制）
 cp .env.example .env
-# 必需：设置 LLM_PROVIDER 以及对应的 *_API_KEY
-# 推荐：GITHUB_TOKEN 和 SILICON_API_KEY（Embedding）
+# 必填：LLM_PROVIDER + 对应 API Key
+# 支持：openai | deepseek | anthropic | gemini
+# 推荐：GITHUB_TOKEN 与 SILICON_API_KEY
+# 可选：LANGFUSE_ENABLED=true + Langfuse keys
 
-# 如果使用Langfuse请配置：
-# LANGFUSE_ENABLED=true
-# LANGFUSE_HOST=http://langfuse-web:3000  #若RepoReaper在Docker内运行
-# LANGFUSE_HOST=http://localhost:3000  #若RepoReaper在本地运行
-# LANGFUSE_PUBLIC_KEY=<你的 public key>
-# LANGFUSE_SECRET_KEY=<你的 secret key>
-
-# （可选）构建前端（仓库已包含 frontend-dist）
-cd frontend-vue
-npm install
-npm run build
-cd ..
-
-# 启动
-python -m app.main
+python3 -m app.main
 ```
 
-访问 `http://localhost:8000`，输入任意 GitHub 仓库地址开始审计。
+打开 [http://localhost:8000](http://localhost:8000)。
 
-**Docker（单容器，本地 Qdrant）：**
+### Docker Compose（App + Qdrant）
 ```bash
 cp .env.example .env
-docker build -t reporeaper .
-docker run -d -p 8000:8000 --env-file .env reporeaper
-```
-
-**Docker Compose（推荐，包含 Qdrant Server）：**
-```bash
-cp .env.example .env
-# 在 .env 中设置 QDRANT_MODE=server 与 QDRANT_URL=http://qdrant:6333
 docker compose up -d --build
 ```
-**Docker Compose + Langfuse（一条命令启动，推荐）**
+
+### 可选观测栈（Langfuse）
 ```bash
-cp .env.example .env
 docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
 ```
 
-**仅启动 Langfuse 观测栈**
-```bash
-docker compose -f docker-compose.observability.yml up -d --build
-```
----
-
-## 📊 评估与追踪现状
-
-| 组件 | 状态 | 说明 |
-|:----|:----:|:----|
-| **在线自动评估主链路** | ✅ 可用 | `/chat` → sidecar 异步评估 → 质量分级路由 |
-| **人工审核闸门** | ✅ 可用 | `sample_id` 审核接口 + 待审队列持久化 + 幂等审批 |
-| **Langfuse 可观测** | ✅ 可用 | 全链路 trace + 分数上报（`final/custom/ragas/tier`） |
-| **离线检索评估** | ⚠️ 部分完成 | 脚本可跑，但依赖已索引向量库且黄金集标注不足 |
-| **黄金数据集质量** | ⚠️ 持续优化中 | 63 条样本，`expected_answer` 已补齐，支持中英双语；当前正补充覆盖广度 |
-| **Ragas 集成** | ✅ 已实现 | 已升级 Dataset API，保留抽样/超时/熔断机制 |
-| **运行时合同收敛** | ✅ 已完成 | 在线运行路径已聚焦 generation 评估；死评估导入与运行时 DPO 占位已移除，score-tier 阈值统一，去重缓存确定性淘汰，启动不再预加载黄金集，Langfuse score 上报改为确定性 `create_score` 路径并支持优雅 shutdown |
-
----
-
-黄金集快速校验：
-```bash
-python evaluation/golden_dataset_builder.py validate --strict
-```
-
-## ⚠️ 已知问题
-
-1. **Python 3.14 + Langfuse 导入报错**  
-   `pydantic.V1.errors.ConfigError: unable to infer type for attribute "description"` — Langfuse 3.x 内部依赖 `pydantic.v1` 兼容层，在 Python 3.14 下不兼容。  
-   **临时方案：** 在 `.env` 中设置 `LANGFUSE_ENABLED=false`，或使用 Python 3.10–3.12。
-
-2. **`docker-compose.yml` 未包含 Langfuse 服务**  
-   即使导入成功，仍需运行中的 Langfuse 实例。请自行添加或使用 [app.langfuse.com](https://app.langfuse.com)。
-
----
-
-## 🗺 评估 Roadmap（唯一基线）
-
-- [x] **Phase 0 - 异步 sidecar + 质量闸门**：主链路非阻塞、队列背压、输入过滤、审批后落盘。
-- [x] **Phase 1 - Trace 全链路串联**：`/chat`、`/analyze`、worker trace 透传，tracing fail-open。
-- [x] **Phase 2 - 分数可观测**：Langfuse Scores 上报 `final/custom/ragas(可选)/quality_tier`。
-- [x] **Phase 3 - 合同收敛与清理（优先级最高）**：在线链路只保留 generation 评估，迁移或删除运行时无用评估资产（DPO 占位、无用导入、无效符号），并统一阈值真值来源；DoD：运行时无死代码。
-- [x] **Phase 4 - Ragas 现代化（代码路径）**：`_ragas_eval()` 已迁移到 Dataset API，保留抽样+超时+熔断，并有兼容性测试。
-- [x] **Phase 5 - 审核流持久化（代码路径）**：稳定 `sample_id` API、待审队列与决策持久化、approve/reject 幂等。
-- [ ] **Phase 6 - 黄金集治理**：拆分检索/生成基准集，补齐参考答案与多语言覆盖，在 CI 做完整性校验；DoD：可作为回归基准。
-- [ ] **Phase 7 - CI 回归闸门**：接入离线评估命令与阈值门禁，PR 指标回退自动失败；DoD：有稳定机器可读报告。
-- [ ] **Phase 8 - Langfuse Dataset 同步**：审批通过样本实现 JSONL + Langfuse Dataset 双写一致；DoD：无双写漂移。
-
----
-
-## 📈 Star History
-
-<a href="https://star-history.com/#tzzp1224/RepoReaper&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=tzzp1224/RepoReaper&type=Date" />
- </picture>
-</a>
+兼容性提示：
+- 推荐 Python `3.10-3.12`。
+- Python `3.14` 当前有已知兼容风险（Langfuse SDK 与部分 legacy asyncio 测试模式）。
