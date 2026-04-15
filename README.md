@@ -3,6 +3,7 @@
 
   <h1>RepoReaper</h1>
   <p><b>Harvest Logic. Dissect Architecture. Chat with Code.</b></p>
+  <p><b>NUS CS5260 Project (Spring 2026)</b></p>
 
   <p>
     <a href="./README.md">English</a> •
