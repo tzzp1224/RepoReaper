@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
 
+from app.utils.locking import KeyedAsyncLocks
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,33 +93,16 @@ class MemoryLockBackend(LockBackend):
     """
     
     def __init__(self):
-        self._locks: Dict[str, asyncio.Lock] = {}
-        self._meta_lock = asyncio.Lock()
-    
-    async def _get_lock(self, key: str) -> asyncio.Lock:
-        async with self._meta_lock:
-            if key not in self._locks:
-                self._locks[key] = asyncio.Lock()
-            return self._locks[key]
+        self._locks = KeyedAsyncLocks()
     
     async def acquire(self, key: str, timeout: float) -> bool:
-        lock = await self._get_lock(key)
-        try:
-            await asyncio.wait_for(lock.acquire(), timeout=timeout)
-            return True
-        except asyncio.TimeoutError:
-            return False
+        return await self._locks.acquire(key, timeout)
     
     async def release(self, key: str) -> None:
-        if key in self._locks:
-            lock = self._locks[key]
-            if lock.locked():
-                lock.release()
+        await self._locks.release(key)
     
     async def is_locked(self, key: str) -> bool:
-        if key not in self._locks:
-            return False
-        return self._locks[key].locked()
+        return await self._locks.is_locked(key)
 
 
 # ============================================================
@@ -139,27 +124,17 @@ class FileLockBackend(LockBackend):
         self._lock_dir = Path(lock_dir)
         self._lock_dir.mkdir(parents=True, exist_ok=True)
         self._handles: Dict[str, object] = {}
-        self._memory_locks: Dict[str, asyncio.Lock] = {}
-        self._meta_lock = asyncio.Lock()
+        self._memory_locks = KeyedAsyncLocks()
     
     def _get_lock_path(self, key: str) -> Path:
         # 清理 key，避免路径注入
         safe_key = "".join(c if c.isalnum() or c in "_-" else "_" for c in key)
         return self._lock_dir / f"{safe_key}.lock"
     
-    async def _get_memory_lock(self, key: str) -> asyncio.Lock:
-        """同进程内的内存锁，防止同一进程内多个协程竞争文件锁"""
-        async with self._meta_lock:
-            if key not in self._memory_locks:
-                self._memory_locks[key] = asyncio.Lock()
-            return self._memory_locks[key]
-    
     async def acquire(self, key: str, timeout: float) -> bool:
         # 先获取内存锁
-        mem_lock = await self._get_memory_lock(key)
-        try:
-            await asyncio.wait_for(mem_lock.acquire(), timeout=timeout)
-        except asyncio.TimeoutError:
+        got_mem_lock = await self._memory_locks.acquire(key, timeout)
+        if not got_mem_lock:
             return False
         
         # 再获取文件锁
@@ -167,6 +142,7 @@ class FileLockBackend(LockBackend):
         start_time = time.time()
         
         while time.time() - start_time < timeout:
+            handle = None
             try:
                 # 尝试获取文件锁
                 handle = open(lock_path, 'w')
@@ -186,12 +162,12 @@ class FileLockBackend(LockBackend):
                 
             except (IOError, OSError):
                 # 锁被占用，等待后重试
-                if 'handle' in dir() and handle:
+                if handle:
                     handle.close()
                 await asyncio.sleep(0.1)
         
         # 超时，释放内存锁
-        mem_lock.release()
+        await self._memory_locks.release(key)
         logger.warning(f"⏰ 文件锁获取超时: {key}")
         return False
     
@@ -214,10 +190,7 @@ class FileLockBackend(LockBackend):
             logger.debug(f"🔓 文件锁已释放: {key}")
         
         # 释放内存锁
-        if key in self._memory_locks:
-            lock = self._memory_locks[key]
-            if lock.locked():
-                lock.release()
+        await self._memory_locks.release(key)
     
     async def is_locked(self, key: str) -> bool:
         lock_path = self._get_lock_path(key)

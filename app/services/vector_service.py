@@ -19,7 +19,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Callable
 
 from rank_bm25 import BM25Okapi
 
@@ -27,6 +27,7 @@ from app.core.config import settings
 from app.storage.base import Document, SearchResult, CollectionStats
 from app.storage.qdrant_store import QdrantVectorStore, QdrantConfig, get_qdrant_factory
 from app.utils.embedding import get_embedding_service, EmbeddingConfig
+from app.utils.locking import AtomicJsonFileStore
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,17 @@ class VectorStore:
         # 文件路径
         self._context_file = os.path.join(config.context_dir, f"{self.session_id}.json")
         self._cache_file = os.path.join(config.context_dir, f"{self.session_id}_bm25.pkl")
+        self._context_lock_file = f"{self._context_file}.lock"
+
+        # 并发控制
+        self._init_lock = asyncio.Lock()
+        self._index_lock = asyncio.Lock()
+        self._context_lock_timeout_seconds = 10.0
+        self._context_state_store = AtomicJsonFileStore(
+            file_path=self._context_file,
+            lock_path=self._context_lock_file,
+            timeout_seconds=self._context_lock_timeout_seconds,
+        )
         
         self._initialized = False
     
@@ -129,17 +141,21 @@ class VectorStore:
         """初始化存储"""
         if self._initialized:
             return
-        
-        # 初始化 Qdrant
-        factory = get_qdrant_factory()
-        self._qdrant = factory.create(self.collection_name)
-        await self._qdrant.initialize()
-        
-        # 加载本地状态
-        await self._load_state()
-        
-        self._initialized = True
-        logger.debug(f"✅ VectorStore 初始化: {self.session_id}")
+
+        async with self._init_lock:
+            if self._initialized:
+                return
+
+            # 初始化 Qdrant
+            factory = get_qdrant_factory()
+            self._qdrant = factory.create(self.collection_name)
+            await self._qdrant.initialize()
+
+            # 加载本地状态
+            await self._load_state()
+
+            self._initialized = True
+            logger.debug(f"✅ VectorStore 初始化: {self.session_id}")
     
     async def close(self) -> None:
         """关闭连接"""
@@ -187,21 +203,23 @@ class VectorStore:
         documents = await self._qdrant.get_all_documents()
         
         if documents:
-            self._doc_store = documents
-            self._indexed_files = {doc.file_path for doc in documents if doc.file_path}
-            
-            tokenized = [self._tokenize(doc.content) for doc in documents]
-            if tokenized:
-                self._bm25 = BM25Okapi(tokenized)
-            
-            self._save_bm25_cache()
-            logger.info(f"✅ BM25 索引重建完成: {len(documents)} 文档")
+            async with self._index_lock:
+                self._doc_store = documents
+                self._indexed_files = {doc.file_path for doc in documents if doc.file_path}
+
+                tokenized = [self._tokenize(doc.content) for doc in documents]
+                if tokenized:
+                    self._bm25 = BM25Okapi(tokenized)
+
+                self._save_bm25_cache()
+                logger.info(f"✅ BM25 索引重建完成: {len(documents)} 文档")
     
     def _save_bm25_cache(self) -> None:
         """保存 BM25 缓存 (原子写入)"""
         if not self._doc_store:
             return
         
+        tmp_path = None
         try:
             fd, tmp_path = tempfile.mkstemp(dir=config.context_dir)
             with os.fdopen(fd, 'wb') as f:
@@ -211,13 +229,15 @@ class VectorStore:
                     "doc_store": self._doc_store,
                     "indexed_files": self._indexed_files,
                 }, f)
-            
-            if os.path.exists(self._cache_file):
-                os.remove(self._cache_file)
-            os.rename(tmp_path, self._cache_file)
-            
+
+            os.replace(tmp_path, self._cache_file)
         except Exception as e:
             logger.error(f"保存 BM25 缓存失败: {e}")
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
     
     def _tokenize(self, text: str) -> List[str]:
         """分词"""
@@ -225,7 +245,39 @@ class VectorStore:
             t.lower() for t in re.split(config.tokenize_regex, text)
             if t.strip()
         ]
-    
+
+    def _ensure_context_state_store(self) -> AtomicJsonFileStore:
+        """
+        保持状态存储器与当前上下文路径一致。
+        （单测会动态改写 _context_file）
+        """
+        store = self._context_state_store
+        if (
+            store.file_path != self._context_file
+            or store.lock_path != self._context_lock_file
+        ):
+            self._context_state_store = AtomicJsonFileStore(
+                file_path=self._context_file,
+                lock_path=self._context_lock_file,
+                timeout_seconds=self._context_lock_timeout_seconds,
+            )
+        return self._context_state_store
+
+    def _load_context_file_unlocked(self) -> Dict[str, Any]:
+        return self._ensure_context_state_store().read()
+
+    def _update_context_file(
+        self,
+        updater: Callable[[Dict[str, Any]], None],
+        *,
+        op_name: str,
+    ) -> bool:
+        return self._ensure_context_state_store().update(
+            updater,
+            op_name=op_name,
+            logger=logger,
+        )
+
     async def save_context(self, repo_url: str, context_data: Dict[str, Any]) -> None:
         """保存仓库上下文 (异步，不阻塞事件循环)"""
         self.repo_url = repo_url
@@ -237,16 +289,10 @@ class VectorStore:
     
     def _write_context_file(self, updates: Dict[str, Any]) -> None:
         """写入上下文文件 (同步，供线程池调用)"""
-        try:
-            existing = {}
-            if os.path.exists(self._context_file):
-                with open(self._context_file, 'r', encoding='utf-8') as f:
-                    existing = json.load(f)
+        def _apply(existing: Dict[str, Any]) -> None:
             existing.update(updates)
-            with open(self._context_file, 'w', encoding='utf-8') as f:
-                json.dump(existing, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"写入上下文失败: {e}")
+
+        self._update_context_file(_apply, op_name="写入上下文")
     
     async def save_report(self, report: str, language: str = "en") -> None:
         """保存技术报告 (异步，不阻塞事件循环)"""
@@ -254,23 +300,16 @@ class VectorStore:
     
     def _write_report(self, report: str, language: str) -> None:
         """写入报告 (同步，供线程池调用)"""
-        try:
-            existing = {}
-            if os.path.exists(self._context_file):
-                with open(self._context_file, 'r', encoding='utf-8') as f:
-                    existing = json.load(f)
-            
+        def _apply(existing: Dict[str, Any]) -> None:
             if "reports" not in existing:
                 existing["reports"] = {}
             existing["reports"][language] = report
             existing["report"] = report
             existing["report_language"] = language
-            
-            with open(self._context_file, 'w', encoding='utf-8') as f:
-                json.dump(existing, f, ensure_ascii=False, indent=2)
+
+        updated = self._update_context_file(_apply, op_name=f"保存报告({language})")
+        if updated:
             logger.info(f"📝 报告已保存: {self.session_id} ({language})")
-        except Exception as e:
-            logger.error(f"保存报告失败: {e}")
     
     def get_report(self, language: str = "en") -> Optional[str]:
         """
@@ -338,23 +377,15 @@ class VectorStore:
         payload: Dict[str, Any],
         generated_at: str,
     ) -> None:
-        try:
-            existing: Dict[str, Any] = {}
-            if os.path.exists(self._context_file):
-                with open(self._context_file, 'r', encoding='utf-8') as f:
-                    existing = json.load(f)
-
+        def _apply(existing: Dict[str, Any]) -> None:
             artifacts = existing.setdefault("artifacts", {})
             by_kind = artifacts.setdefault(kind, {})
             by_kind[language] = {
                 "data": payload or {},
                 "generated_at": generated_at,
             }
-
-            with open(self._context_file, 'w', encoding='utf-8') as f:
-                json.dump(existing, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error("保存 artifact 失败 (%s/%s): %s", kind, language, e)
+        
+        self._update_context_file(_apply, op_name=f"保存 artifact({kind}/{language})")
 
     def get_artifact(self, kind: str, language: str) -> Optional[Dict[str, Any]]:
         """读取通用 artifact 快照。"""
@@ -392,23 +423,15 @@ class VectorStore:
         )
 
     def _write_score_core(self, core_payload: Dict[str, Any], generated_at: str) -> None:
-        try:
-            existing: Dict[str, Any] = {}
-            if os.path.exists(self._context_file):
-                with open(self._context_file, 'r', encoding='utf-8') as f:
-                    existing = json.load(f)
-
+        def _apply(existing: Dict[str, Any]) -> None:
             artifacts = existing.setdefault("artifacts", {})
             score_artifact = artifacts.setdefault("score", {})
             score_artifact["core"] = {
                 "data": core_payload or {},
                 "generated_at": generated_at,
             }
-
-            with open(self._context_file, 'w', encoding='utf-8') as f:
-                json.dump(existing, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error("保存 score core 失败: %s", e)
+        
+        self._update_context_file(_apply, op_name="保存 score core")
 
     def get_score_core(self) -> Optional[Dict[str, Any]]:
         """读取 score 核心结果。"""
@@ -442,12 +465,7 @@ class VectorStore:
         localized_payload: Dict[str, Any],
         generated_at: str,
     ) -> None:
-        try:
-            existing: Dict[str, Any] = {}
-            if os.path.exists(self._context_file):
-                with open(self._context_file, 'r', encoding='utf-8') as f:
-                    existing = json.load(f)
-
+        def _apply(existing: Dict[str, Any]) -> None:
             artifacts = existing.setdefault("artifacts", {})
             score_artifact = artifacts.setdefault("score", {})
             localized = score_artifact.setdefault("localized", {})
@@ -455,11 +473,8 @@ class VectorStore:
                 "data": localized_payload or {},
                 "generated_at": generated_at,
             }
-
-            with open(self._context_file, 'w', encoding='utf-8') as f:
-                json.dump(existing, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error("保存 score localized 失败 (%s): %s", language, e)
+        
+        self._update_context_file(_apply, op_name=f"保存 score localized({language})")
 
     def get_score_localized(self, language: str) -> Optional[Dict[str, Any]]:
         """读取 score 指定语言文本快照。"""
@@ -497,8 +512,9 @@ class VectorStore:
             return None
         
         try:
-            with open(self._context_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            data = self._load_context_file_unlocked()
+            if not data:
+                return None
             
             # 恢复内存状态
             self.repo_url = data.get("repo_url")
@@ -523,19 +539,23 @@ class VectorStore:
             await self._qdrant.delete_collection()
             await self._qdrant.initialize()
         
-        # 清理本地文件
-        for f in [self._context_file, self._cache_file]:
-            if os.path.exists(f):
-                os.remove(f)
-        
-        # 重置内存状态
-        self._bm25 = None
-        self._doc_store = []
-        self._indexed_files = set()
-        self.repo_url = None
-        self.global_context = {}
+        # 清理本地文件 + 重置内存状态
+        await asyncio.to_thread(self._clear_local_state_files)
+        async with self._index_lock:
+            self._bm25 = None
+            self._doc_store = []
+            self._indexed_files = set()
+            self.repo_url = None
+            self.global_context = {}
         
         logger.info(f"🗑️ 重置存储: {self.session_id}")
+
+    def _clear_local_state_files(self) -> None:
+        self._ensure_context_state_store().clear(
+            extra_paths=[self._cache_file],
+            op_name="清理本地状态",
+            logger=logger,
+        )
     
     # 兼容旧接口
     def reset_collection(self) -> None:
@@ -589,35 +609,36 @@ class VectorStore:
         if not valid_indices:
             logger.error("所有 Embedding 都失败了")
             return 0
-        
-        # 2. 构建 Document 对象
-        docs = []
-        for i in valid_indices:
-            doc_id = f"{metadatas[i].get('file', 'unknown')}_{len(self._doc_store) + len(docs)}"
-            doc = Document(
-                id=doc_id,
-                content=documents[i],
-                metadata=metadatas[i],
-            )
-            docs.append(doc)
-        
+
         valid_embeddings = [embeddings[i] for i in valid_indices]
-        
-        # 3. 写入 Qdrant
-        added = await self._qdrant.add_documents(docs, valid_embeddings)
-        
-        # 4. 更新 BM25 索引 (放入线程池，避免阻塞)
-        self._doc_store.extend(docs)
-        self._indexed_files.update(doc.file_path for doc in docs)
-        
-        await asyncio.to_thread(self._rebuild_bm25_sync)
-        
-        return added
+
+        async with self._index_lock:
+            # 2. 构建 Document 对象（在锁内生成稳定递增 ID）
+            base_idx = len(self._doc_store)
+            docs = []
+            for offset, i in enumerate(valid_indices):
+                doc_id = f"{metadatas[i].get('file', 'unknown')}_{base_idx + offset}"
+                doc = Document(
+                    id=doc_id,
+                    content=documents[i],
+                    metadata=metadatas[i],
+                )
+                docs.append(doc)
+
+            # 3. 写入 Qdrant
+            added = await self._qdrant.add_documents(docs, valid_embeddings)
+
+            # 4. 更新 BM25 索引 (放入线程池，避免阻塞)
+            self._doc_store.extend(docs)
+            self._indexed_files.update(doc.file_path for doc in docs)
+
+            await asyncio.to_thread(self._rebuild_bm25_sync)
+            return added
     
     def _rebuild_bm25_sync(self) -> None:
         """重建 BM25 索引 (同步，用于线程池)"""
         tokenized = [self._tokenize(doc.content) for doc in self._doc_store]
-        self._bm25 = BM25Okapi(tokenized)
+        self._bm25 = BM25Okapi(tokenized) if tokenized else None
         self._save_bm25_cache()
     
     async def embed_text(self, text: str) -> List[float]:
@@ -759,7 +780,7 @@ class VectorStore:
     @property
     def indexed_files(self) -> Set[str]:
         """已索引的文件"""
-        return self._indexed_files
+        return set(self._indexed_files)
 
 
 # ============================================================
