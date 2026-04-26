@@ -90,7 +90,7 @@ class TestSuggestedQuestions:
         monkeypatch.setattr(mod, "store_manager", _FakeStoreManager(store))
         monkeypatch.setattr(mod, "get_client", lambda: fake_llm)
 
-        questions_1, cache_hit_1 = asyncio.get_event_loop().run_until_complete(
+        questions_1, cache_hit_1 = asyncio.run(
             mod.get_suggested_questions(session_id="demo", language="zh", force=False)
         )
         assert cache_hit_1 is False
@@ -101,7 +101,7 @@ class TestSuggestedQuestions:
         assert store.get_artifact("chat_questions", "zh") is not None
         assert fake_llm.chat.completions.calls == 1
 
-        questions_2, cache_hit_2 = asyncio.get_event_loop().run_until_complete(
+        questions_2, cache_hit_2 = asyncio.run(
             mod.get_suggested_questions(session_id="demo", language="zh", force=False)
         )
         assert cache_hit_2 is True
@@ -130,13 +130,13 @@ class TestSuggestedQuestions:
         monkeypatch.setattr(mod, "store_manager", _FakeStoreManager(store))
         monkeypatch.setattr(mod, "get_client", lambda: fake_llm)
 
-        first_questions, first_cache_hit = asyncio.get_event_loop().run_until_complete(
+        first_questions, first_cache_hit = asyncio.run(
             mod.get_suggested_questions(session_id="demo", language="en", force=False)
         )
         assert first_cache_hit is False
         assert fake_llm.chat.completions.calls == 1
 
-        second_questions, second_cache_hit = asyncio.get_event_loop().run_until_complete(
+        second_questions, second_cache_hit = asyncio.run(
             mod.get_suggested_questions(session_id="demo", language="en", force=True)
         )
         assert second_cache_hit is False
@@ -152,7 +152,7 @@ class TestSuggestedQuestions:
         monkeypatch.setattr(mod, "store_manager", _FakeStoreManager(store))
         monkeypatch.setattr(mod, "get_client", lambda: fake_llm)
 
-        questions, cache_hit = asyncio.get_event_loop().run_until_complete(
+        questions, cache_hit = asyncio.run(
             mod.get_suggested_questions(session_id="demo", language="en", force=True)
         )
         assert cache_hit is False
@@ -200,5 +200,5 @@ class TestRoadmapPrompt:
         assert len(commit_lines) == 10
         assert "change 12" in prompt
         assert "change 3" in prompt
-        assert "change 2" not in prompt
-        assert "change 1" not in prompt
+        assert not any("change 2" in line for line in commit_lines)
+        assert not any(re.search(r"\bchange 1\b", line) for line in commit_lines)

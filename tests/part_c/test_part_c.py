@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+import re
 import pytest
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -241,6 +242,20 @@ class FakeVectorStore:
     def __init__(self, context: Optional[Dict], search_results: List[Dict]):
         self._context = context
         self._search_results = search_results
+        self.repo_url = (context or {}).get("repo_url")
+        self._score_core_entry: Optional[Dict[str, Any]] = None
+        self._score_localized_entries: Dict[str, Dict[str, Any]] = {}
+        self._indexed_files = {
+            item.get("file")
+            for item in search_results
+            if item.get("file")
+        }
+        file_tree = ((context or {}).get("global_context") or {}).get("file_tree", "")
+        for path in re.findall(
+            r"([A-Za-z0-9_./-]+\.(?:py|js|ts|tsx|jsx|java|go|rs|cpp|c|h|cs|php|rb|kt|scala|swift))",
+            file_tree,
+        ):
+            self._indexed_files.add(path)
 
     def load_context(self):
         return self._context
@@ -253,6 +268,35 @@ class FakeVectorStore:
 
     async def search_hybrid(self, query: str, top_k: int = 5) -> List[Dict]:
         return self._search_results[:top_k]
+
+    @property
+    def indexed_files(self):
+        return self._indexed_files
+
+    async def add_documents(self, documents: List[str], metadatas: List[Dict[str, Any]]) -> int:
+        for meta in metadatas:
+            file_path = meta.get("file")
+            if file_path:
+                self._indexed_files.add(file_path)
+        return len(documents)
+
+    def get_score_core(self) -> Optional[Dict[str, Any]]:
+        return self._score_core_entry
+
+    async def save_score_core(self, payload: Dict[str, Any]) -> None:
+        self._score_core_entry = {"data": payload, "generated_at": "2026-04-26T00:00:00Z"}
+
+    def get_score_localized(self, language: str) -> Optional[Dict[str, Any]]:
+        return self._score_localized_entries.get(language)
+
+    async def save_score_localized(self, language: str, payload: Dict[str, Any]) -> None:
+        self._score_localized_entries[language] = {
+            "data": payload,
+            "generated_at": "2026-04-26T00:00:00Z",
+        }
+
+    def get_score_localized_languages(self) -> List[str]:
+        return sorted(self._score_localized_entries.keys())
 
 
 class FakeStoreManager:
@@ -403,7 +447,7 @@ class TestComputeReproScore:
     def test_returns_valid_result(self):
         from app.services.repro_score_service import compute_repro_score
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             compute_repro_score(session_id="test_session")
         )
 
@@ -419,7 +463,7 @@ class TestComputeReproScore:
     def test_to_dict_matches_contract(self):
         from app.services.repro_score_service import compute_repro_score
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             compute_repro_score(session_id="test_session")
         )
         d = result.to_dict()
@@ -427,7 +471,7 @@ class TestComputeReproScore:
         contract_keys = {
             "overall_score", "overall_score_raw", "level", "quality_tier",
             "dimension_scores", "dimension_scores_raw",
-            "risks", "evidence_refs", "summary",
+            "risks", "evidence_refs", "summary", "language", "cache_hit",
         }
         assert set(d.keys()) == contract_keys
 
@@ -445,14 +489,14 @@ class TestComputeReproScore:
         from app.services.repro_score_service import compute_repro_score
 
         with pytest.raises(ValueError, match="no analyzed context"):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 compute_repro_score(session_id="empty")
             )
 
     def test_repo_url_resolves_session(self):
         from app.services.repro_score_service import compute_repro_score
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             compute_repro_score(repo_url="https://github.com/mock-owner/mock-repo")
         )
         assert result.overall_score > 0
@@ -461,7 +505,7 @@ class TestComputeReproScore:
         from app.services.repro_score_service import compute_repro_score
 
         with pytest.raises(ValueError, match="至少提供一个"):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 compute_repro_score()
             )
 
@@ -489,7 +533,7 @@ class TestComputeReproScore:
 
         from app.services.repro_score_service import compute_repro_score
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             compute_repro_score(
                 session_id="test_session",
                 insight_since_days=30,
@@ -524,11 +568,14 @@ class TestComputePaperAlignment:
         class FakeSettings:
             default_model_name = "mock-model"
         monkeypatch.setattr(mod, "settings", FakeSettings())
+        async def _no_rewrite(claim: str):
+            return [(claim, 1.0)]
+        monkeypatch.setattr(mod, "_rewrite_claim_queries", _no_rewrite)
 
     def test_returns_valid_result(self):
         from app.services.paper_align_service import compute_paper_alignment
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             compute_paper_alignment(
                 paper_text="We propose a two-stage retrieval pipeline with ablation.",
                 session_id="test_session",
@@ -544,7 +591,7 @@ class TestComputePaperAlignment:
     def test_to_dict_matches_contract(self):
         from app.services.paper_align_service import compute_paper_alignment
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             compute_paper_alignment(
                 paper_text="Some method claims",
                 session_id="test_session",
@@ -576,7 +623,7 @@ class TestComputePaperAlignment:
     def test_confidence_calculation(self):
         from app.services.paper_align_service import compute_paper_alignment
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             compute_paper_alignment(
                 paper_text="method claims",
                 session_id="test_session",
@@ -589,7 +636,7 @@ class TestComputePaperAlignment:
         from app.services.paper_align_service import compute_paper_alignment
 
         with pytest.raises(ValueError, match="paper_text is required"):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 compute_paper_alignment(paper_text="", session_id="test")
             )
 
@@ -602,14 +649,14 @@ class TestComputePaperAlignment:
         from app.services.paper_align_service import compute_paper_alignment
 
         with pytest.raises(ValueError, match="no analyzed context"):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 compute_paper_alignment(paper_text="claims", session_id="empty")
             )
 
     def test_top_k_clamp(self):
         from app.services.paper_align_service import compute_paper_alignment
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             compute_paper_alignment(
                 paper_text="claims",
                 session_id="test_session",
@@ -622,7 +669,7 @@ class TestComputePaperAlignment:
         from app.services.paper_align_service import compute_paper_alignment_stream
 
         source_text = "a" * 7000
-        events = asyncio.get_event_loop().run_until_complete(
+        events = asyncio.run(
             _collect_stream_events(
                 compute_paper_alignment_stream(
                     paper_text=source_text,
@@ -660,7 +707,7 @@ class TestLLMFallback:
 
         from app.services.repro_score_service import compute_repro_score
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             compute_repro_score(session_id="test")
         )
         assert result.overall_score > 0
@@ -680,7 +727,7 @@ class TestLLMFallback:
 
         from app.services.paper_align_service import compute_paper_alignment
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             compute_paper_alignment(paper_text="claims", session_id="test")
         )
         assert result.confidence == 0.0

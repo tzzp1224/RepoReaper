@@ -540,7 +540,24 @@ class VectorStore:
     # 兼容旧接口
     def reset_collection(self) -> None:
         """同步重置 (兼容旧代码)"""
-        asyncio.get_event_loop().run_until_complete(self.reset())
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self.reset())
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
+            return
+        
+        if loop.is_running():
+            raise RuntimeError(
+                "reset_collection cannot run inside an active event loop; use `await reset()` instead"
+            )
+        
+        loop.run_until_complete(self.reset())
     
     async def add_documents(
         self,
@@ -832,6 +849,41 @@ class VectorStoreManager:
                 await entry.store.close()
             self._sessions.clear()
             logger.info("🔒 所有 Session 已关闭")
+    
+    async def cleanup_expired_files(self, max_idle_minutes: int = 60) -> Dict[str, Any]:
+        """
+        手动清理长时间未访问的会话。
+        
+        仅释放内存中的 session 资源，不删除磁盘上的索引和报告文件。
+        """
+        now = time.time()
+        idle_threshold_seconds = max_idle_minutes * 60
+        closed_session_ids: List[str] = []
+        
+        async with self._lock:
+            stale_sessions = [
+                session_id
+                for session_id, entry in self._sessions.items()
+                if (now - entry.last_access) >= idle_threshold_seconds
+            ]
+            
+            for session_id in stale_sessions:
+                entry = self._sessions.pop(session_id)
+                await entry.store.close()
+                closed_session_ids.append(session_id)
+        
+        if closed_session_ids:
+            logger.info(
+                "🧹 手动清理空闲 Session: %s",
+                ", ".join(closed_session_ids),
+            )
+        
+        return {
+            "closed_sessions": len(closed_session_ids),
+            "closed_session_ids": closed_session_ids,
+            "max_idle_minutes": max_idle_minutes,
+            "active_sessions": len(self._sessions),
+        }
     
     def get_stats(self) -> Dict[str, Any]:
         """获取管理器统计信息"""
