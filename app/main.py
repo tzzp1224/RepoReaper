@@ -594,6 +594,12 @@ async def chat(request: Request):
     async def chat_stream_with_eval():
         """包装 process_chat_stream，流结束后触发评估"""
         nonlocal stream_completed
+        tracing_service.record_step(
+            step_name="chat_stream_start",
+            status="info",
+            message="chat streaming started",
+            payload={"session_id": session_id},
+        )
         # 清除旧的评估数据
         clear_eval_data(session_id)
 
@@ -604,6 +610,12 @@ async def chat(request: Request):
 
             # 流完成后标记
             stream_completed = True
+            tracing_service.record_step(
+                step_name="chat_stream_completed",
+                status="completed",
+                message="chat streaming completed",
+                payload={"session_id": session_id},
+            )
 
             # 流结束后触发评估（此时数据已存储在 chat_service 中）
             try:
@@ -611,6 +623,12 @@ async def chat(request: Request):
                 eval_data = get_eval_data(session_id)
 
                 if auto_eval_service and eval_data and eval_data.answer:
+                    tracing_service.record_step(
+                        step_name="auto_eval_triggered",
+                        status="info",
+                        message="auto evaluation triggered",
+                        payload={"session_id": session_id},
+                    )
                     print(f"\n📊 [Auto-Eval] Starting evaluation for session {session_id}")
                     print(f"   - Query: {user_query[:50]}...")
                     print(f"   - Context length: {len(eval_data.retrieved_context)} chars")
@@ -634,9 +652,22 @@ async def chat(request: Request):
                         print(f"⚠️ Empty answer for session {session_id}")
             except Exception as e:
                 print(f"⚠️ Failed to trigger auto-eval: {e}")
+                tracing_service.record_step(
+                    step_name="auto_eval_error",
+                    status="error",
+                    message=str(e),
+                    payload={"session_id": session_id},
+                )
                 import traceback
                 traceback.print_exc()
         finally:
+            if not stream_completed:
+                tracing_service.record_step(
+                    step_name="chat_stream_error",
+                    status="error",
+                    message="chat stream interrupted before completion",
+                    payload={"session_id": session_id},
+                )
             tracing_service.end_trace(
                 {
                     "session_id": session_id,

@@ -187,10 +187,39 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
     # === 检查是否有其他用户正在分析同一仓库 ===
     if not regenerate_only:
         if await RepoLock.is_locked(session_id):
-            yield json.dumps({
+            waiting_event = json.dumps({
                 "step": "waiting", 
                 "message": f"⏳ Another user is analyzing this repository. Please wait..."
             })
+            tracing_service.record_step(
+                step_name="waiting",
+                status="info",
+                message="Another user is analyzing this repository",
+                payload={"session_id": session_id},
+            )
+            yield waiting_event
+
+    def _record_step_from_stream_event(raw_event: str) -> None:
+        try:
+            payload = json.loads(raw_event)
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        step_name = str(payload.get("step") or "stream_event")
+        message = payload.get("message")
+        if step_name == "error":
+            status = "error"
+        elif step_name in {"finish", "complete", "completed"}:
+            status = "completed"
+        else:
+            status = "info"
+        tracing_service.record_step(
+            step_name=step_name,
+            status=status,
+            message=str(message) if message is not None else None,
+            payload=payload,
+        )
     
     # === 获取仓库锁 (仅写操作需要) ===
     try:
@@ -199,12 +228,15 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
                 repo_url, session_id, language, regenerate_only, 
                 short_id, trace_id, start_time
             ):
+                _record_step_from_stream_event(event)
                 yield event
     except TimeoutError as e:
-        yield json.dumps({
+        timeout_event = json.dumps({
             "step": "error",
             "message": f"❌ {str(e)}. The repository is being analyzed by another user."
         })
+        _record_step_from_stream_event(timeout_event)
+        yield timeout_event
     finally:
         tracing_service.end_trace(
             {
@@ -354,7 +386,19 @@ async def _agent_stream_inner(
                         file_start = time.time()
                         
                         # 🔧 异步 GitHub API (已优化为非阻塞)
+                        tool_start = time.time()
                         content = await get_file_content(repo_url, file_path)
+                        tracing_service.record_tool_call(
+                            tool_name="github.get_file_content",
+                            parameters={"repo_url": repo_url, "file_path": file_path},
+                            result={
+                                "has_content": bool(content),
+                                "content_chars": len(content or ""),
+                            },
+                            latency_ms=(time.time() - tool_start) * 1000,
+                            success=bool(content),
+                            error=None if content else "empty_content",
+                        )
                         if not content: 
                             tracing_service.add_event("file_read_failed", {"file": file_path})
                             return None
@@ -388,8 +432,30 @@ async def _agent_stream_inner(
                                 })
                             if documents:
                                 try:
+                                    add_start = time.time()
                                     await vector_db.add_documents(documents, metadatas)
+                                    tracing_service.record_tool_call(
+                                        tool_name="vector.add_documents",
+                                        parameters={
+                                            "file_path": file_path,
+                                            "documents": len(documents),
+                                        },
+                                        result={"indexed_documents": len(documents)},
+                                        latency_ms=(time.time() - add_start) * 1000,
+                                        success=True,
+                                    )
                                 except Exception as e:
+                                    tracing_service.record_tool_call(
+                                        tool_name="vector.add_documents",
+                                        parameters={
+                                            "file_path": file_path,
+                                            "documents": len(documents),
+                                        },
+                                        result=None,
+                                        latency_ms=0.0,
+                                        success=False,
+                                        error=str(e),
+                                    )
                                     print(f"❌ 索引错误 {file_path}: {e}")
                                     # 不中断，继续处理其他文件
                                     return None

@@ -555,7 +555,19 @@ def _build_jit_status_message(
 async def _download_and_index(vector_db, file_path):
     """下载并索引文件"""
     try:
+        fetch_start = time.time()
         content = await get_file_content(vector_db.repo_url, file_path)
+        tracing_service.record_tool_call(
+            tool_name="github.get_file_content",
+            parameters={"repo_url": vector_db.repo_url, "file_path": file_path},
+            result={
+                "has_content": bool(content),
+                "content_chars": len(content or ""),
+            },
+            latency_ms=(time.time() - fetch_start) * 1000,
+            success=bool(content),
+            error=None if content else "empty_content",
+        )
         if not content: return False
         
         chunks = await asyncio.to_thread(chunker.chunk_file, content, file_path)
@@ -584,9 +596,25 @@ async def _download_and_index(vector_db, file_path):
                 "start_line": meta.get("start_line"),
                 "end_line": meta.get("end_line"),
             })
+        add_start = time.time()
         await vector_db.add_documents(documents, metadatas)
+        tracing_service.record_tool_call(
+            tool_name="vector.add_documents",
+            parameters={"file_path": file_path, "documents": len(documents)},
+            result={"indexed_documents": len(documents)},
+            latency_ms=(time.time() - add_start) * 1000,
+            success=True,
+        )
         return True
     except Exception as e:
+        tracing_service.record_tool_call(
+            tool_name="chat.download_and_index",
+            parameters={"file_path": file_path},
+            result=None,
+            latency_ms=0.0,
+            success=False,
+            error=str(e),
+        )
         print(f"Download Error: {e}")
         return False
 

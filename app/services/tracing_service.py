@@ -28,6 +28,7 @@ from functools import wraps
 from datetime import datetime
 from dataclasses import dataclass
 
+from app.storage.runtime_store import runtime_trace_store
 
 # ============================================================================
 # 第一部分: Langfuse客户端初始化 (可选)
@@ -93,6 +94,7 @@ class TracingService:
         self.config = config or TracingConfig()
         self.langfuse_client = None
         self.current_trace_id = None
+        self.runtime_store = runtime_trace_store
         
         if self.config.enabled and self.config.backend == "langfuse":
             if not LANGFUSE_AVAILABLE:
@@ -277,6 +279,33 @@ class TracingService:
             return
 
         raise AttributeError("Langfuse client has no compatible event API")
+
+    @staticmethod
+    def _infer_run_status(metadata: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(metadata, dict):
+            return "completed"
+        explicit = str(metadata.get("status", "")).strip().lower()
+        if explicit in {"running", "completed", "failed", "cancelled"}:
+            return explicit
+        if metadata.get("stream_completed") is False:
+            return "failed"
+        if metadata.get("error") or metadata.get("exception"):
+            return "failed"
+        return "completed"
+
+    @staticmethod
+    def _infer_event_step_status(event_name: str, event_data: Optional[Dict[str, Any]]) -> str:
+        lowered = (event_name or "").lower()
+        if "error" in lowered or "failed" in lowered:
+            return "error"
+        if isinstance(event_data, dict):
+            if event_data.get("error"):
+                return "error"
+            if event_data.get("success") is False:
+                return "error"
+        if "finish" in lowered or "completed" in lowered or "done" in lowered:
+            return "completed"
+        return "info"
     
     def start_trace(self, trace_name: str, session_id: str, metadata: Dict = None) -> str:
         """启动一个新的追踪链"""
@@ -292,6 +321,16 @@ class TracingService:
                 pass
 
         self._set_trace_context(trace_id=trace_id, session_id=session_id)
+        try:
+            self.runtime_store.start_run(
+                run_id=trace_id,
+                trace_id=trace_id,
+                session_id=session_id,
+                trace_name=trace_name,
+                metadata=metadata or {},
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to persist run start: {e}")
         
         if self.langfuse_client:
             try:
@@ -332,11 +371,23 @@ class TracingService:
     def end_trace(self, metadata: Dict[str, Any] = None) -> None:
         """结束当前 trace 并清理上下文。"""
         trace_id = self.get_current_trace_id()
+        session_id = self.get_current_session_id()
         if trace_id:
             try:
                 self.add_event("trace_end", metadata or {})
             except Exception as e:
                 print(f"⚠️ Failed to end trace cleanly: {e}")
+            try:
+                self.runtime_store.finish_run(
+                    trace_id=trace_id,
+                    status=self._infer_run_status(metadata),
+                    metadata={
+                        **(metadata or {}),
+                        "session_id": session_id,
+                    },
+                )
+            except Exception as e:
+                print(f"⚠️ Failed to persist run finish: {e}")
         self.clear_trace_context()
     
     def record_span(
@@ -444,6 +495,20 @@ class TracingService:
             except Exception as e:
                 print(f"⚠️ Failed to record tool call: {e}")
         
+        try:
+            self.runtime_store.add_tool_call(
+                trace_id=self.get_current_trace_id(),
+                tool_name=tool_name,
+                parameters=parameters or {},
+                result_preview=tool_record.get("result"),
+                latency_ms=latency_ms,
+                success=success,
+                error=error,
+                session_id=self.get_current_session_id(),
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to persist tool call: {e}")
+
         self._log_locally("tool_call", tool_record)
     
     def record_retrieval_debug(
@@ -715,8 +780,50 @@ class TracingService:
                 )
             except Exception as e:
                 print(f"⚠️ Failed to record event '{event_name}': {e}")
+
+        try:
+            self.runtime_store.add_step(
+                trace_id=self.get_current_trace_id(),
+                step_name=event_name or "event",
+                status=self._infer_event_step_status(event_name, event_data),
+                message=(event_data or {}).get("message") if isinstance(event_data, dict) else None,
+                payload=event_data or {},
+                session_id=self.get_current_session_id(),
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to persist event step '{event_name}': {e}")
         
         self._log_locally("event", event_record)
+
+    def record_step(
+        self,
+        step_name: str,
+        status: str = "info",
+        message: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """记录结构化步骤日志。"""
+        step_record = {
+            "step_name": step_name,
+            "status": status,
+            "message": message,
+            "payload": payload or {},
+            "trace_id": self.get_current_trace_id(),
+            "session_id": self.get_current_session_id(),
+            "timestamp": datetime.now().isoformat(),
+        }
+        try:
+            self.runtime_store.add_step(
+                trace_id=self.get_current_trace_id(),
+                step_name=step_name,
+                status=status,
+                message=message,
+                payload=payload or {},
+                session_id=self.get_current_session_id(),
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to persist step '{step_name}': {e}")
+        self._log_locally("step", step_record)
     
     def _log_locally(self, log_type: str, data: Dict) -> None:
         """本地日志记录"""
