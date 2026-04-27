@@ -57,6 +57,16 @@ RepoReaper is an evidence-grounded repository intelligence agent for engineers, 
 | Verifying paper claims against code | Paper Align checks claims against code evidence and surfaces missing or partial support with stream diagnostics. |
 | Planning next questions | Suggested Questions proposes three anchored follow-ups for architecture, implementation, and reproduction. |
 
+## Key Features
+
+- **📄 Paper-to-Code Alignment**: Upload a research paper (PDF) and automatically verify if the repository implementation matches the claims and algorithms described in the paper.
+- **🎯 Reproducibility Scoring**: Automatically evaluates the repository's documentation, environment setup, and code structure to generate a comprehensive reproducibility score.
+- **💬 Interactive Codebase Chat**: Ask specific questions about the codebase using a context-aware Retrieval-Augmented Generation (RAG) system based on Qdrant.
+- **📊 Issue & Commit Insights**: Summarize repository activity, track feature evolution, and analyze issue resolutions.
+- **🗺️ Architecture & Roadmap**: Automatically generate Mermaid.js diagrams for code architecture and development roadmaps.
+- **🧠 Multi-LLM Support**: Seamlessly switch between OpenAI, Gemini, Anthropic (Claude), and DeepSeek models.
+- **👁️ Observability & Tracing**: Built-in LLM tracing and evaluation observability to monitor token usage and prompt chains (supported via dedicated Docker Compose profiles).
+
 ## How RepoReaper Works
 - **Session-centered state model**: each repository maps to a stable session, and analysis context, reports, and artifacts are reused across visits.
 - **Layered retrieval pipeline**: vector search and BM25 are fused by RRF, then query rewrite and JIT file loading recover missing evidence for complex questions.
