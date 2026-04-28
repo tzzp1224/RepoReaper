@@ -13,6 +13,7 @@ import re
 from typing import List, Optional, Dict
 from urllib.parse import urlparse
 
+from app.storage.repo_mirror_store import RepoMirrorStore, RepoMirrorUnavailable
 from app.utils.github_client import (
     GitHubClient,
     GitHubRepo,
@@ -60,8 +61,13 @@ class GitHubService:
     ```
     """
     
-    def __init__(self, client: Optional[GitHubClient] = None):
+    def __init__(
+        self,
+        client: Optional[GitHubClient] = None,
+        mirror_store: Optional[RepoMirrorStore] = None,
+    ):
         self._client = client
+        self._mirror_store = mirror_store if mirror_store is not None else RepoMirrorStore()
     
     @property
     def client(self) -> GitHubClient:
@@ -95,6 +101,16 @@ class GitHubService:
             文件路径列表
         """
         repo = await self._get_repo_from_url(repo_url)
+        if self._mirror_store is not None:
+            try:
+                files = await self._mirror_store.get_repo_tree(repo, file_filter)
+                logger.debug(f"仓库镜像命中: {repo.full_name}@{repo.default_branch}")
+                return [f.path for f in files]
+            except RepoMirrorUnavailable as e:
+                logger.info(f"仓库镜像不可用，回退 GitHub API: {repo.full_name} ({e})")
+            except Exception as e:
+                logger.warning(f"仓库镜像读取异常，回退 GitHub API: {repo.full_name} ({e})")
+
         files = await self.client.get_repo_tree(repo, file_filter)
         return [f.path for f in files]
     
@@ -114,6 +130,18 @@ class GitHubService:
             文件内容，失败返回 None
         """
         repo = await self._get_repo_from_url(repo_url)
+        if self._mirror_store is not None:
+            try:
+                content = await self._mirror_store.get_file_content(repo, file_path)
+                if content is not None:
+                    logger.debug(f"镜像文件命中: {repo.full_name}:{file_path}")
+                    return content
+                logger.debug(f"镜像文件未命中，回退 GitHub API: {repo.full_name}:{file_path}")
+            except RepoMirrorUnavailable as e:
+                logger.info(f"仓库镜像不可用，回退 GitHub API: {repo.full_name}:{file_path} ({e})")
+            except Exception as e:
+                logger.warning(f"仓库镜像读取异常，回退 GitHub API: {repo.full_name}:{file_path} ({e})")
+
         return await self.client.get_file_content(repo, file_path)
     
     async def get_files_content(

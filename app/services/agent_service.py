@@ -15,6 +15,7 @@ from app.services.github_service import get_repo_structure, get_file_content
 from app.services.vector_service import store_manager
 from app.services.chunking_service import UniversalChunker, ChunkingConfig
 from app.services.tracing_service import tracing_service
+from app.utils.session import generate_repo_lock_key
 
 # === Helper: 鲁棒的 JSON 提取 ===
 def extract_json_from_text(text):
@@ -175,18 +176,24 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
         regenerate_only: 如果为 True，跳过索引步骤，直接使用已有数据生成新语言报告
     """
     short_id = session_id[-6:] if session_id else "unknown"
+    lock_key = _resolve_repo_lock_key(repo_url, session_id)
     
     # === 追踪初始化 ===
     trace_id = tracing_service.start_trace(
         trace_name="agent_analysis",
         session_id=session_id,
-        metadata={"repo_url": repo_url, "language": language, "regenerate_only": regenerate_only}
+        metadata={
+            "repo_url": repo_url,
+            "language": language,
+            "regenerate_only": regenerate_only,
+            "lock_key": lock_key,
+        }
     )
     start_time = time.time()
     
     # === 检查是否有其他用户正在分析同一仓库 ===
     if not regenerate_only:
-        if await RepoLock.is_locked(session_id):
+        if await RepoLock.is_locked(lock_key):
             waiting_event = json.dumps({
                 "step": "waiting", 
                 "message": f"⏳ Another user is analyzing this repository. Please wait..."
@@ -195,7 +202,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
                 step_name="waiting",
                 status="info",
                 message="Another user is analyzing this repository",
-                payload={"session_id": session_id},
+                payload={"session_id": session_id, "lock_key": lock_key},
             )
             yield waiting_event
 
@@ -223,7 +230,7 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
     
     # === 获取仓库锁 (仅写操作需要) ===
     try:
-        async with RepoLock.acquire(session_id):
+        async with RepoLock.acquire(lock_key):
             async for event in _agent_stream_inner(
                 repo_url, session_id, language, regenerate_only, 
                 short_id, trace_id, start_time
@@ -243,9 +250,24 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
                 "session_id": session_id,
                 "repo_url": repo_url,
                 "language": language,
+                "lock_key": lock_key,
                 "trace_id": trace_id,
             }
         )
+
+
+def _resolve_repo_lock_key(repo_url: str, session_id: str) -> str:
+    """
+    解析仓库级锁 key。
+
+    优先使用 repo_url 归一化 key；异常时回退 session_id，确保不阻断主流程。
+    """
+    try:
+        if repo_url and repo_url.strip():
+            return generate_repo_lock_key(repo_url)
+    except Exception:
+        pass
+    return session_id or "unknown_repo_lock"
 
 
 async def _agent_stream_inner(

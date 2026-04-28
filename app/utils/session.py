@@ -11,6 +11,7 @@ from typing import Optional, Tuple, Dict
 from urllib.parse import urlparse
 
 from app.core.config import conversation_config
+from app.utils.github_client import parse_repo_url
 
 
 def normalize_repo_url(url: str) -> str:
@@ -86,6 +87,35 @@ def generate_repo_session_id(repo_url: str) -> str:
     clean_repo = re.sub(r'[^a-zA-Z0-9]', '', repo)[:15]
     
     return f"repo_{url_hash}_{clean_owner}_{clean_repo}"
+
+
+def generate_repo_lock_key(repo_url: str) -> str:
+    """
+    基于仓库 URL 生成仓库级锁 key（跨 session 统一）。
+
+    目标:
+    - 同一仓库（不同 URL 形态）映射到同一把锁
+    - 与 session_id 解耦，避免同仓库不同 session 并发写
+    """
+    raw_url = (repo_url or "").strip()
+    owner, repo = "", ""
+    normalized = ""
+
+    parsed = parse_repo_url(raw_url) if raw_url else None
+    if parsed:
+        owner, repo = parsed[0].lower(), parsed[1].lower()
+        normalized = f"https://github.com/{owner}/{repo}"
+    elif raw_url:
+        normalized = normalize_repo_url(raw_url)
+        owner, repo = extract_repo_info(normalized)
+
+    hash_source = normalized or raw_url.lower() or "unknown_repo"
+    url_hash = hashlib.sha256(hash_source.encode()).hexdigest()[:10]
+
+    clean_owner = re.sub(r'[^a-zA-Z0-9]', '', owner)[:20] or "unknown"
+    clean_repo = re.sub(r'[^a-zA-Z0-9]', '', repo)[:30] or "unknown"
+
+    return f"repo_lock_{url_hash}_{clean_owner}_{clean_repo}"
 
 
 def is_repo_session_id(session_id: str) -> bool:
