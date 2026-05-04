@@ -26,7 +26,9 @@
     </a>
   </p>
 
-  <img src="./docs/demo_preview.gif" width="800" style="max-width: 100%; border-radius: 8px;" alt="RepoReaper Demo" />
+  <video src="./docs/demo.mp4" width="800" style="max-width: 100%; border-radius: 8px;" controls loop muted playsinline>
+    Your browser does not support the video tag.
+  </video>
 </div>
 
 RepoReaper 是一个面向 GitHub 仓库的证据化智能分析 Agent，服务于需要快速吃透陌生代码库的工程师、评审者和研究者。它会把仓库沉淀为可复用的调查工作台，让后续追问、评审和验证始终基于同一仓库上下文。它不是一次性总结工具，而是可持续复用的分析、问答、可复现评估与论文对齐工作流。

@@ -27,7 +27,9 @@
     </a>
   </p>
 
-  <img src="./docs/demo_preview.gif" width="800" style="max-width: 100%; border-radius: 8px;" alt="RepoReaper Demo" />
+  <video src="./docs/demo.mp4" width="800" style="max-width: 100%; border-radius: 8px;" controls loop muted playsinline>
+    Your browser does not support the video tag.
+  </video>
 </div>
 
 RepoReaper is an evidence-grounded repository intelligence agent for engineers, reviewers, and researchers who need to understand unfamiliar codebases quickly. It turns a GitHub repository into a reusable investigation workspace, so follow-up questions and verification stay anchored to the same context. Instead of a one-shot summary, you get a persistent workflow for analysis, chat, reproducibility checks, and paper-to-code validation.
