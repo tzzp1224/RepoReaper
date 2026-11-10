@@ -26,10 +26,12 @@ services:
         reservations:
           memory: 256M
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      # qdrant 镜像不含 curl/wget，用 bash /dev/tcp 发 HTTP 请求
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/6333 && printf 'GET /readyz HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200 '"]
       interval: 5s
       timeout: 5s
       retries: 3
+      start_period: 10s
 
   # ============================================================
   # FastAPI 应用 (2 Workers, 限制内存 1GB)
