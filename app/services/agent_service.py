@@ -6,6 +6,8 @@ import re
 import ast
 import httpx
 import time
+from contextlib import AsyncExitStack, aclosing
+from pathlib import Path
 from typing import Set, Tuple, List
 from datetime import datetime
 from app.core.config import settings, agent_config
@@ -17,6 +19,7 @@ from app.services.repository_source import bound_source
 from app.services.vector_service import store_manager
 from app.services.chunking_service import UniversalChunker, ChunkingConfig
 from app.services.tracing_service import tracing_service
+from app.storage.snapshot_leases import collection_lease
 from app.utils.session import generate_repo_lock_key, normalize_repo_url
 
 # === Helper: 鲁棒的 JSON 提取 ===
@@ -236,12 +239,13 @@ async def agent_stream(repo_url: str, session_id: str, language: str = "en", reg
     # === 获取仓库锁 (仅写操作需要) ===
     try:
         async with RepoLock.acquire(lock_key):
-            async for event in _agent_stream_inner(
+            async with aclosing(_agent_stream_inner(
                 repo_url, session_id, language, regenerate_only, 
                 short_id, trace_id, start_time
-            ):
-                _record_step_from_stream_event(event)
-                yield event
+            )) as stream:
+                async for event in stream:
+                    _record_step_from_stream_event(event)
+                    yield event
     except TimeoutError as e:
         timeout_event = json.dumps({
             "step": "error",
@@ -282,6 +286,7 @@ async def _agent_stream_inner(
     """
     实际的分析流程 (在锁保护下执行)
     """
+    snapshot_leases = AsyncExitStack()
     try:
         vector_db = store_manager.get_store(session_id)
         state = vector_db.load_context() or {}
@@ -313,6 +318,9 @@ async def _agent_stream_inner(
                 manifest = previous
             index = SnapshotIndex(vector_db, manifest)
             if not regenerate_only:
+                await snapshot_leases.enter_async_context(collection_lease(
+                    Path(vector_db._context_file).parent, manifest["namespace"],
+                ))
                 await index.backend.initialize()
 
         async def read_file(path):
@@ -971,3 +979,5 @@ async def _agent_stream_inner(
             
         yield json.dumps({"step": "error", "message": ui_msg})
         return # 终止流
+    finally:
+        await snapshot_leases.aclose()

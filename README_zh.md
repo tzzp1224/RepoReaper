@@ -76,11 +76,25 @@ RepoReaper 是一个面向 GitHub 仓库的证据化智能分析 Agent，服务�
 - **逐 claim 证据检索**：每个 claim 扩展为检索友好查询，并与仓库片段匹配。
 - **判定结果有边界**：明确区分 `aligned`、`partial`、`missing`、`insufficient_evidence`，并给出证据摘录。
 - **判定前补证据**。对已固定 commit 的索引，在判定前读取候选文件的原始片段，附带 commit 和行区间。
+- **诊断过程可流式观察**。输出 claim 进度、检索轨迹、回退动作与最终置信度。
 
 ### 可选的 Jev 路由
 
 设置 `TYPESAFE_API_KEY` 和 `JEV_MODE=shadow` 可同时记录 Jev 和本地规则选择的读取批次。`JEV_MODE=active` 允许达到阈值的选择调整读取顺序。默认 `off`。Jev 接收问题和候选路径元数据，文件访问与读取由 RepoReaper 执行。 [TypeSafe Choice API](https://docs.typesafe.ai/primitives/choice)
-- **诊断过程可流式观察**：claim 进度、检索轨迹、回退动作与最终置信度都可被检查。
+
+服务进程复用 Jev 连接。文件批次排序的 `shadow` 后台上限为 1.5 秒，`active` 前台上限为 450 毫秒。
+
+同时配置 `REPO_EXPLORATION_MODE=jev` 和 `JEV_MODE=active` 后，Jev 会在可用的语义召回、字面量 grep、增量读源码之间选择下一步，证据充足时可以结束。同一次 API 请求里的动作和参数子问题共享候选文件、行范围和 grep 字面量。RepoReaper 根据问题、固定 commit 的目录树和前几轮工具结果构造选项，并执行获选的工具。最多四次决策，总预算九秒，单次最多 1.5 秒。路由无法继续时回退到规则召回。`JEV_MODE=shadow` 只在后台记录首轮建议，回答使用规则召回。
+
+### 模型工具探索
+
+默认召回优先定位实现文件，再读取原始代码。设置 `REPO_EXPLORATION_MODE=auto` 后，Chat 可在证据不足时调用 `find_paths`、`grep`、`search_semantic` 和 `read_spans`。工具绑定本轮 Git commit。`grep` 在本地镜像里按字面量查找，远程 API 回退只检查少量候选文件。探索最多规划两轮、执行五次工具调用，前台探索总时限为 10 秒。
+
+### 索引刷新与历史回收
+
+- `/api/repo/check` 返回当前 commit、发布时间，以及已启用 webhook 时的最近刷新状态。
+- GitHub App 或仓库 webhook 可向公开的 `/api/github/webhook` 发送 `push` 事件。配置 `REPO_WEBHOOK_SECRET` 和逗号分隔的 `REPO_WEBHOOK_REPOSITORIES`，并使用相同签名密钥。只有允许列表中已索引仓库的默认分支会入队。重复投递去重，并发更新合并。Worker 在运行时读取远端当前 HEAD。 [GitHub 签名验证](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries) · [push 事件](https://docs.github.com/en/webhooks/webhook-events-and-payloads#push)
+- `python -m app.snapshot_gc owner/repo` 预览旧向量回收，添加 `--apply` 执行。默认保留最近两个历史版本及过去 24 小时的退役向量。任何活动快照引用的向量都会保留。回收使用共享上下文目录中的 POSIX 锁，快照仍在读取或写入时会跳过。服务和回收命令须使用同一上下文目录和 Qdrant 实例。
 
 ## 快速开始
 ### 本地运行（最短路径）

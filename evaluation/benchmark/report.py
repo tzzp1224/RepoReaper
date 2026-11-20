@@ -57,29 +57,64 @@ def generate_report(directory, split="test"):
         score = read_json(path / "score.json") if (path / "score.json").exists() else {"status": "missing"}
         job_calls = by_job[job["job_id"]]
         inference_calls = [c for c in job_calls if not c["phase"].startswith("judge_")]
+        decisions = result.get("jev_decisions", [])
+        planning = [c for c in inference_calls if c["kind"] == "jev" or
+                    (c["kind"] == "generation" and not c.get("request_config", {}).get("stream"))]
         rows.append({"job_id": job["job_id"], "sample_id": job["sample"]["id"], "repo": job["sample"]["repo"],
             "variant": job["variant"], "repeat": job["repeat"], "status": result["status"],
             "score_status": score["status"], "score": score.get("total"), "axes": score.get("scores"),
-            "latency_ms": result.get("latency_ms"), "jit_rounds": result.get("jit_rounds", 0),
-            "tool_failures": sum(not c["success"] for c in result.get("tool_calls", [])),
+            "latency_ms": result.get("latency_ms"), "first_answer_token_ms": result.get("first_answer_token_ms"),
+            "jit_rounds": result.get("jit_rounds", 0),
+            "exploration_rounds": result.get("exploration_rounds", 0),
+            "exploration_status": result.get("exploration_status"),
+            "tool_failures": sum(not c.get("success", c.get("status") in {"ok", "empty"})
+                                 for c in result.get("tool_calls", [])),
             "read_files": len({r["path"] for r in result.get("reads", [])}),
             "llm_attempts": sum(c["kind"] == "generation" for c in inference_calls),
             "cost_cny": sum(c["cost_cny"] for c in inference_calls),
             "judge_cost_cny": sum(c["cost_cny"] for c in job_calls if c["phase"].startswith("judge_")),
             "actual_usage_calls": sum(c["usage_kind"] == "actual" for c in inference_calls),
             "unknown_usage_calls": sum(c["usage_kind"] != "actual" for c in inference_calls),
+            "generation_input_tokens": sum(c.get("input_tokens", 0) for c in inference_calls if c["kind"] == "generation"),
+            "jev_attempts": sum(c["kind"] == "jev" for c in inference_calls),
+            "jev_responses": sum("choice" in d for d in decisions),
+            "jev_overrides": sum(bool(d.get("used_batch") and d["used_batch"] != d["baseline_batch"]) for d in decisions),
+            "jev_latency_ms": decisions[0]["latency_ms"] if decisions else None,
+            "jev_tool_actions": [d["used_action"] for d in decisions if d.get("used_action")],
+            "nonstream_generation_latency_ms": [c["latency_ms"] for c in planning
+                                                if c["kind"] == "generation" and "latency_ms" in c],
+            "jev_call_latency_ms": [d["latency_ms"] for d in decisions if d.get("used_action")],
+            "planning_input_tokens": sum(c.get("input_tokens", 0) for c in planning),
+            "planning_output_tokens": sum(c.get("output_tokens", 0) for c in planning),
             "input_tokens_actual": sum(c.get("input_tokens", 0) for c in inference_calls),
             "output_tokens_actual": sum(c.get("output_tokens", 0) for c in inference_calls)})
     groups = {}
-    for variant in ("A", "B", "C", "D"):
+    variants = manifest.get("variants", ["A", "B", "C", "D"])
+    for variant in variants:
         subset = [r for r in rows if r["variant"] == variant and r["repeat"] == 0]
         scored = [r for r in subset if r["score"] is not None]
         latency = [r["latency_ms"] for r in subset if r["latency_ms"] is not None]
+        ttft = [r["first_answer_token_ms"] for r in subset if r["first_answer_token_ms"] is not None]
         groups[variant] = {"expected": len(subset), "statuses": dict(Counter(r["status"] for r in subset)),
             "scored": len(scored), "score_mean": mean(r["score"] for r in scored) if scored else None,
             "score_coverage": len(scored)/len(subset) if subset else 0,
             "axes": {axis: mean(r["axes"][axis] for r in scored) for axis in scored[0]["axes"]} if scored else {},
             "latency_p50_ms": percentile(latency, .5), "latency_p95_ms": percentile(latency, .95),
+            "first_answer_p50_ms": percentile(ttft, .5), "first_answer_sample_count": len(ttft),
+            "generation_input_tokens": sum(r["generation_input_tokens"] for r in subset),
+            "input_tokens_actual": sum(r["input_tokens_actual"] for r in subset),
+            "output_tokens_actual": sum(r["output_tokens_actual"] for r in subset),
+            "unknown_usage_calls": sum(r["unknown_usage_calls"] for r in subset),
+            "jev_attempts": sum(r["jev_attempts"] for r in subset),
+            "jev_responses": sum(r["jev_responses"] for r in subset),
+            "jev_overrides": sum(r["jev_overrides"] for r in subset),
+            "jev_p50_ms": percentile([r["jev_latency_ms"] for r in subset if r["jev_latency_ms"] is not None], .5),
+            "jev_tool_actions": dict(Counter(action for r in subset for action in r["jev_tool_actions"])),
+            "nonstream_generation_p50_ms": percentile([ms for r in subset for ms in r["nonstream_generation_latency_ms"]], .5),
+            "jev_tool_call_p50_ms": percentile([ms for r in subset for ms in r["jev_call_latency_ms"]], .5),
+            "planning_input_tokens": sum(r["planning_input_tokens"] for r in subset),
+            "planning_output_tokens": sum(r["planning_output_tokens"] for r in subset),
+            "exploration_statuses": dict(Counter(r["exploration_status"] for r in subset if r["exploration_status"])),
             "cost_per_question_cny": mean(r["cost_cny"] for r in subset) if subset else None}
     ready = any(r["score"] is not None for r in rows) and all(r["status"] != "missing" and
         (r["status"] != "completed" or r["score_status"] == "scored") for r in rows)
@@ -95,10 +130,14 @@ def generate_report(directory, split="test"):
     for row in rows:
         if row["variant"] in ("B", "C") and row["score"] is not None:
             repeat_groups[(row["sample_id"], row["variant"])].append(row["score"])
+    comparisons = {("C", "F", "G"): (("F", "C"), ("G", "F"), ("G", "C")),
+                   ("F", "H", "I"): (("H", "F"), ("I", "H"), ("I", "F")),
+                   ("H", "K", "L"): (("K", "H"), ("L", "K"), ("L", "H")),
+                   ("K", "L", "M"): (("L", "K"), ("M", "K"), ("M", "L"))}.get(tuple(variants), (("C", "B"), ("C", "D")))
     summary = {"protocol": manifest["protocol"], "ready_for_comparison": ready,
         "groups": groups, "cost_by_phase_cny": dict(phases),
         "total_charged_or_reserved_cny": sum(phases.values()),
-        "comparisons": {"C-B": paired_bootstrap(rows, "C", "B"), "C-D": paired_bootstrap(rows, "C", "D")} if ready else {},
+        "comparisons": {f"{a}-{b}": paired_bootstrap(rows, a, b) for a, b in comparisons} if ready else {},
         "repeat_score_ranges": {f"{sid}_{variant}": max(scores)-min(scores)
                                 for (sid, variant), scores in repeat_groups.items() if len(scores) == 3},
         "cost_note": "Token-priced estimates; missing usage retains conservative reservations. Reconcile with provider invoices."}
@@ -110,8 +149,9 @@ def generate_report(directory, split="test"):
             writer = csv.DictWriter(f, fieldnames=list(rows[0]))
             writer.writeheader()
             writer.writerows(rows)
+    complete_message = "开发试跑已完成，结果用于后续实验设计。" if manifest.get("variants") else "正式对比已就绪。"
     lines = ["# SWE-QA-Pro 固定子集 · 自定义 RepoReaper Agent", "",
-             "正式对比已就绪。" if ready else "运行或评分尚未完整，以下为进度统计，不能用于效果结论。", "",
+             complete_message if ready else "运行或评分尚未完整，以下为进度统计，不能用于效果结论。", "",
              "总分为 5–50 分，不是准确率；均分仅覆盖有评分答案，必须同时阅读分母。", "",
              "|组|题数|有评分|均分 /50|p50 ms|p95 ms|单题费用估算 CNY|", "|---|---:|---:|---:|---:|---:|---:|"]
     for v, g in groups.items():
@@ -140,7 +180,7 @@ def generate_report(directory, split="test"):
 def export_review(run, schedule, output):
     packets, key = [], {}
     for job in schedule:
-        if not job["sample"]["evidence_review"] or job["variant"] not in ("B", "C") or job["repeat"]:
+        if not job["sample"]["evidence_review"] or job["variant"] not in ("B", "C", "F", "G", "H", "I", "K", "L", "M") or job["repeat"]:
             continue
         path = run / "jobs" / job["job_id"] / "record.json"
         if not path.exists():
@@ -172,13 +212,18 @@ def summarize_evidence(run, schedule, output):
         if not required or not label.get("verified_before_review") or not path.exists() or job["repeat"]:
             continue
         result = read_json(path)["result"]
-        initial = {e["file"] for e in result.get("evidence", []) if e["round"] == 0}
+        initial = result.get("initial_files")
+        initial = set(initial) if initial is not None else {e["file"] for e in result.get("evidence", []) if e.get("round") == 0}
         final = {e["file"] for e in result.get("evidence", [])}
-        new = {c["file"] for c in result.get("tool_calls", []) if c["success"]} - initial
+        new = {c.get("file", c.get("path")) for c in result.get("tool_calls", [])
+               if c.get("tool", "read_spans") == "read_spans" and c.get("success", c.get("status") == "ok")} - initial
+        batches = result.get("candidate_batches", {})
         details.append({"job_id": job["job_id"], "variant": job["variant"],
             "initial_file_recall": len(initial & required)/len(required),
             "final_file_recall": len(final & required)/len(required),
             "jit_required_file_precision": len(new & required)/len(new) if new else None,
+            "required_files_by_batch": {batch: sorted(required.intersection(paths)) for batch, paths in batches.items()},
+            "selected_batch": result.get("selected_batch"),
             "required_files": sorted(required), "initial_files": sorted(initial), "final_files": sorted(final)})
     reviews = read_json(output / "blind_review.json")
     counts = Counter(r["failure_category"] for r in reviews if r.get("failure_category") not in (None, "", "none"))

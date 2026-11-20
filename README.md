@@ -87,11 +87,23 @@ RepoReaper is an evidence-grounded repository intelligence agent for engineers, 
 - **Evidence retrieval per claim**: each claim is expanded into retrieval-friendly queries and matched against repository snippets.
 - **Explicit judgment states**: outputs separate `aligned`, `partial`, `missing`, and `insufficient_evidence`, with evidence excerpts.
 - **Source verification**: on a commit-pinned index, candidate files are read before judgment, with original line ranges and commit details in the evidence.
+- **Streaming diagnostics**: claim progress, retrieval traces, fallback actions, and final confidence are emitted as inspectable events.
 
 ### Optional Jev routing
 
 Set `TYPESAFE_API_KEY` and `JEV_MODE=shadow` to log Jev's preferred read batch alongside the local choice. `JEV_MODE=active` lets sufficiently confident selections reorder the candidate batches. The default is `off`. Jev receives the question and candidate path metadata, while repository access and file reads stay in RepoReaper. [TypeSafe Choice API](https://docs.typesafe.ai/primitives/choice)
-- **Streaming diagnostics**: claim progress, retrieval traces, fallback actions, and final confidence are emitted as inspectable events.
+
+The app reuses Jev connections per worker. Batch ranking gives shadow calls 1.5 seconds and active calls 450 ms.
+
+Set `REPO_EXPLORATION_MODE=jev` and `JEV_MODE=active` to use Jev as the tool router. Jev chooses among semantic search, literal grep, and an incremental source read whenever those actions are available. It can also finish once enough source has been verified. Action and argument questions share the candidate files, line windows, and literals in one API request. RepoReaper builds the options from the question, pinned tree, and earlier tool results, and executes the selected action. The router has up to four decisions and a nine-second total budget, with up to 1.5 seconds per decision. If it cannot establish a usable route, Chat falls back to rule-based retrieval. With `JEV_MODE=shadow`, the router records the first proposed action in the background while Chat uses rule-based retrieval.
+
+### Repository tools and index refresh
+
+The default retrieval path prioritizes implementation files, then reads original source spans. Set `REPO_EXPLORATION_MODE=auto` to let Chat use `find_paths`, `grep`, `search_semantic`, and `read_spans` when initial evidence is incomplete. Tools read from the turn's pinned commit. Git grep uses literal matching, and the GitHub API fallback checks only a small set of candidate files. The explorer has two planning rounds, five tool calls, and a ten-second wall-clock limit.
+
+`POST /api/repo/check` returns the active commit, publication time, and refresh status when the webhook is enabled. Set `REPO_WEBHOOK_SECRET` and `REPO_WEBHOOK_REPOSITORIES` to accept signed `push` deliveries at `POST /api/github/webhook`. The repository list is comma-separated. Only default-branch pushes to allowlisted, already indexed repositories are queued. The worker merges pending refreshes and reads the current remote HEAD. [GitHub webhook validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
+
+Run `python -m app.snapshot_gc owner/repo` to preview collection of retired vectors and add `--apply` to delete eligible points. By default it retains the two most recent retired versions and vectors retired in the past 24 hours. The app and collection command must share the context directory and Qdrant instance. On POSIX hosts a shared file lock protects in-flight readers and writers.
 
 ## Quick Start
 ### Local (fastest path)

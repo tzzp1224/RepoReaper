@@ -105,12 +105,52 @@ def prepare(rows, provenance, directory, per_repo=4, seed=42):
     return manifest
 
 
+def prepare_jit(rows, provenance, source_manifest, directory, repos, seed=42, *,
+                experiment="jev", excluded_manifests=()):
+    """Freeze one previously unused question per requested repository."""
+    directory = Path(directory)
+    if (directory / "manifest.json").exists():
+        raise ValueError("Manifest already exists; create a new run directory")
+    revisions = {s["repo"]: s["commit_id"] for s in source_manifest["samples"]}
+    seen = {s["id"] for manifest in (source_manifest, *excluded_manifests) for s in manifest["samples"]}
+    variants = {"jev": ["C", "F", "G"], "exploration": ["F", "H", "I"],
+                "source": ["H", "K", "L"], "tools": ["K", "L", "M"]}[experiment]
+    manifest = {"protocol": "SWE-QA-Pro JIT pilot on shared sealed seeds", "variants": variants,
+                "seed": seed, "source_manifest_hash": source_manifest["manifest_hash"],
+                "provenance": provenance, "samples": []}
+    references = {}
+    for repo in sorted(set(repos)):
+        sha = revisions[repo]
+        candidates = {}
+        for row in rows:
+            if row["repo"] != repo or row["commit_id"] != sha:
+                continue
+            question = row["question"].strip()
+            sample_id = digest([repo, sha, question])
+            if sample_id not in seen and question and row["answer"].strip():
+                candidates[sample_id] = row
+        if not candidates:
+            raise ValueError(f"No unused questions at the sealed revision for {repo}")
+        sample_id = min(candidates, key=lambda candidate: digest([seed, candidate]))
+        row = candidates[sample_id]
+        references[sample_id] = row["answer"]
+        manifest["samples"].append({"id": sample_id, "repo": repo, "commit_id": sha,
+                                    "question": row["question"].strip(), "split": "dev",
+                                    "evidence_review": True, "repeat": False})
+    manifest["reference_hash"] = digest(references)
+    manifest["manifest_hash"] = digest(manifest)
+    write_json(directory / "manifest.json", manifest)
+    write_json(directory / "references.json", references)
+    return manifest
+
+
 def jobs(manifest, split, variants=("A", "B", "C", "D"), repeats=False):
-    for sample in manifest["samples"]:
+    for index, sample in enumerate(manifest["samples"]):
         if sample["split"] != split or (repeats and not sample["repeat"]):
             continue
-        for variant in variants:
-            if variant not in ("A", "B", "C", "D", "E"):
+        rotation = index % len(variants) if manifest.get("variants") else 0
+        for variant in (*variants[rotation:], *variants[:rotation]):
+            if variant not in ("A", "B", "C", "D", "E", "F", "G", "H", "I", "K", "L", "M"):
                 raise ValueError("Unknown variant")
             for repeat in ((1, 2) if repeats else (0,)):
                 if repeats and variant not in ("B", "C"):

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from math import isfinite
 
 from .data import digest, jobs, read_json, write_json, load_manifest
 from .meter import Ledger
@@ -115,7 +116,8 @@ def launch(payload, work):
 
 
 @exclusive_run
-def run_jobs(directory, repos, rates, split="dev", repeats=False, budget=450, timeout=600, model=None):
+def run_jobs(directory, repos, rates, split="dev", repeats=False, budget=450, timeout=600, model=None,
+             *, seed_run=None, jev_timeout=0.45, jev_model="jev-latest"):
     run = Path(directory).resolve()
     manifest = load_manifest(run / "manifest.json")
     info = preflight(model)
@@ -123,12 +125,18 @@ def run_jobs(directory, repos, rates, split="dev", repeats=False, budget=450, ti
         raise ValueError(f"Generation preflight failed: {info}")
     if not info["judge_key"]:
         raise ValueError("OPENAI_API_KEY is missing: configure independent judging before paid experiments")
-    import math
-    for kind in ("generation", "embedding", "judge"):
+    variants = manifest.get("variants", ["A", "B", "C", "D"])
+    jit_pilot = variants in (["C", "F", "G"], ["F", "H", "I"], ["H", "K", "L"], ["K", "L", "M"])
+    if jit_pilot and (split != "dev" or repeats or not seed_run or not 0 < jev_timeout <= 5):
+        raise ValueError("The JIT pilot requires --seed-run, the dev split, and a Jev timeout in (0, 5]")
+    needs_jev = bool({"G", "M"} & set(variants))
+    if needs_jev and not environment().get("TYPESAFE_API_KEY"):
+        raise ValueError("TYPESAFE_API_KEY is required for the JIT pilot")
+    for kind in ("generation", "embedding", "judge", "jev") if needs_jev else ("generation", "embedding", "judge"):
         rate = rates[kind]
         if not rate.get("source") or not rate.get("verified_at"):
             raise ValueError(f"Unverified pricing for {kind}")
-        if any(type(rate.get(k)) not in (int, float) or not math.isfinite(rate[k]) or rate[k] < 0
+        if any(type(rate.get(k)) not in (int, float) or not isfinite(rate[k]) or rate[k] < 0
                for k in ("input_cny_per_million", "output_cny_per_million")):
             raise ValueError(f"Invalid pricing for {kind}")
     if rates["generation"].get("model") and rates["generation"]["model"] != info["model"]:
@@ -144,25 +152,49 @@ def run_jobs(directory, repos, rates, split="dev", repeats=False, budget=450, ti
     probe_env["RUNTIME_TRACE_DB_PATH"] = str(scratch / "runtime.db")
     probe = subprocess.check_output([sys.executable, "-c", code], cwd=scratch, env=probe_env, text=True)
     configs = json.loads(next(s[7:] for s in probe.splitlines() if s.startswith("CONFIG=")))
+    existing_seeds = {}
+    jit_config = {}
+    if jit_pilot:
+        seed_run = Path(seed_run).resolve()
+        if load_manifest(seed_run / "manifest.json")["manifest_hash"] != manifest["source_manifest_hash"]:
+            raise ValueError("Seed run does not match the manifest used to prepare the JIT pilot")
+        needed = {(sample["repo"], sample["commit_id"]) for sample in manifest["samples"]}
+        for seal in sorted((seed_run / "seeds").glob("*/sealed.json")):
+            job = read_json(seal.parent / "job.json")
+            key = (job["repo"], job["commit_id"])
+            if key in needed:
+                if key in existing_seeds:
+                    raise ValueError(f"Multiple sealed indexes for {key}")
+                existing_seeds[key] = seal.parent
+        if existing_seeds.keys() != needed:
+            raise ValueError("A pilot repository has no sealed index at the selected commit")
+        jit_config = {"jev_timeout": jev_timeout, "jev_model": jev_model,
+                      "seed_hashes": {f"{repo}@{sha}": read_json(path / "sealed.json")["data_hash"]
+                                      for (repo, sha), path in existing_seeds.items()}}
     frozen = freeze(run, {"manifest_hash": manifest["manifest_hash"], "model": info,
                           "configs": configs, "rates": rates, "budget_cny": budget,
-                          "timeout_seconds": timeout, "judge_model": "gpt-5-2025-08-07"})
+                          "timeout_seconds": timeout, "judge_model": "gpt-5-2025-08-07", **jit_config})
     ledger = Ledger(run / "usage.sqlite", budget)
     base = {"ledger": str(run / "usage.sqlite"), "budget_cny": budget,
             "rates": rates, "timeout_seconds": timeout, "chat_config": configs["chat"], "model": info["model"]}
+    if jit_pilot:
+        base.update(jev_timeout=jev_timeout, jev_model=jev_model)
     selected_manifest = manifest
     if split == "test":
         selection = read_json(run / "formal_selection.json")
         if selection["manifest_hash"] != manifest["manifest_hash"]:
             raise ValueError("Formal selection manifest mismatch")
         selected_manifest = dict(manifest, samples=[s for s in manifest["samples"] if s["id"] in selection["sample_ids"]])
-    expected = list(jobs(selected_manifest, split, repeats=repeats))
+    expected = list(jobs(selected_manifest, split, variants=variants, repeats=repeats))
     phase = "repeat" if repeats else split
     # Publish the denominator before any model request, including seed failures.
     write_json(run / f"schedule_{phase}.json", expected)
     seed_by_repo = {}
     seed_failures = {}
     for repo, sha in sorted({(s["repo"], s["commit_id"]) for s in manifest["samples"]}):
+        if jit_pilot:
+            seed_by_repo[repo] = existing_seeds[repo, sha]
+            continue
         seed_key = digest([repo, sha, frozen])[:24]
         seed_dir = run / "seeds" / seed_key
         if not (seed_dir / "sealed.json").exists():

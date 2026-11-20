@@ -7,7 +7,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from evaluation.benchmark.data import prepare, jobs, load_manifest, read_json, write_json
+from evaluation.benchmark.data import prepare, prepare_jit, jobs, load_manifest, read_json, write_json
 from evaluation.benchmark.meter import BudgetExceeded, Ledger, Meter
 from evaluation.benchmark.report import paired_bootstrap, generate_report
 from evaluation.benchmark.runner import restore_seed, tree_hash
@@ -141,6 +141,17 @@ def test_seed_copies_do_not_share_jit_mutations(tmp_path):
     with pytest.raises(ValueError): restore_seed(seed, tmp_path / "third")
 
 
+def test_jit_pilot_holds_out_questions_and_rotates_group_order(tmp_path):
+    historic = prepare(dataset(), {"revision": "fixed"}, tmp_path / "historic")
+    repos = {sample["repo"] for sample in historic["samples"]}
+    pilot = prepare_jit(dataset(), {"revision": "fixed"}, historic, tmp_path / "pilot", repos)
+    again = prepare_jit(list(reversed(dataset())), {"revision": "fixed"}, historic, tmp_path / "again", repos)
+    assert pilot == again
+    assert {sample["id"] for sample in pilot["samples"]}.isdisjoint(s["id"] for s in historic["samples"])
+    assert "SECRET_REFERENCE" not in json.dumps(pilot)
+    assert [job["variant"] for job in jobs(pilot, "dev", variants=pilot["variants"])] == list("CFGFGC")
+
+
 def test_budget_unknown_usage_is_not_free_and_resume_is_durable(tmp_path):
     ledger = Ledger(tmp_path / "usage.db", limit=1)
     call = ledger.reserve("a", "dev", .75, {})
@@ -169,6 +180,22 @@ def test_meter_blocks_request_before_network_and_records_actual_usage(tmp_path):
     row = ledger.records()[0]
     assert row["input_tokens"] == 10 and row["cost_cny"] == pytest.approx(.000015)
     assert row["returned_model"] == "pinned"
+
+
+def test_jev_meter_records_actual_usage_without_storing_request_state(tmp_path):
+    ledger = Ledger(tmp_path / "usage.db", limit=1)
+    rate = {"input_cny_per_million": 1, "output_cny_per_million": 0,
+            "source": "test-only", "verified_at": "test-only"}
+
+    async def fake(**kwargs):
+        return {"model": "jev-pinned", "usage": {"input_tokens": 40, "output_tokens": 8}}
+
+    call = Meter(ledger, "job", "dev", {"jev": rate}).wrap(fake, "jev")
+    asyncio.run(call(model="jev-pinned", state={"question": "do not persist this"}, questions={"route": {}}))
+    row = ledger.records()[0]
+    assert row["input_tokens"] == 40 and row["output_tokens"] == 8
+    assert row["returned_model"] == "jev-pinned" and row["cost_cny"] == pytest.approx(.000040)
+    assert row["request_config"] == {"model": "jev-pinned"}
 
 
 def test_final_answer_excludes_tool_round_and_jit_is_ordered(monkeypatch):

@@ -28,6 +28,7 @@ from app.services.chunking_service import ChunkingConfig, UniversalChunker
 from app.services.github_service import get_file_content, get_github_service
 from app.services.repository_evidence import RepositoryEvidence, build_evidence, select_skill
 from app.services.vector_service import store_manager
+from app.storage.snapshot_leases import pin_snapshot
 from app.utils.llm_client import get_client
 from app.utils.session import generate_repo_session_id
 
@@ -576,7 +577,12 @@ async def _compute_paper_alignment_internal(
 
     sid = _resolve_session(session_id, repo_url)
     store = store_manager.get_store(sid)
-    context = store.load_context()
+    async with pin_snapshot(store) as context:
+        return await _align_at_snapshot(paper_text, sid, store, context, top_k, event_cb,
+                                        input_chars, effective_chars)
+
+
+async def _align_at_snapshot(paper_text, sid, store, context, top_k, event_cb, input_chars, effective_chars):
     if not context or not context.get("repo_url"):
         raise ValueError(f"Session {sid} has no analyzed context. Run /analyze first.")
 

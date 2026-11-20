@@ -4,14 +4,19 @@ import subprocess
 from types import SimpleNamespace as NS
 
 import httpx
+import pytest
 from qdrant_client import AsyncQdrantClient
 
 from app.services import agent_service, chat_service, jev_gate, repo_index, vector_service
 from app.services.github_service import GitHubService
-from app.services.repository_evidence import RepositoryEvidence
+from app.services.repo_explorer import evidence_gap, explore
+from app.services.repo_tool_router import investigate_with_jev
+from app.services.repository_evidence import RepositoryEvidence, select_skill
 from app.services.repository_source import GitSnapshotSource
 from app.storage import qdrant_store
 from app.storage.runtime_store import RuntimeTraceStore
+from app.storage.snapshot_leases import collection_lease, pin_snapshot
+from app.snapshot_gc import collect
 from app.utils.github_client import GitHubRepo
 
 
@@ -28,6 +33,120 @@ def commit(root, message):
     return git(root, "rev-parse", "HEAD")
 
 
+def test_explorer_uses_fixed_commit_grep_semantic_and_source_ranges(tmp_path):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "xarray/backends").mkdir(parents=True)
+    (tmp_path / "xarray/backends/rasterio_.py").write_text("def open_rasterio():\n    return 'committed'\n")
+    (tmp_path / "xarray/backends/api.py").write_text("def register():\n    return 'wrapper'\n")
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "examples/rasterio_conversion.py").write_text("open_rasterio()\n")
+    (tmp_path / "MANIFEST.in").write_text("include xarray/backends/*\n")
+    (tmp_path / "tox.ini").write_text("[tox]\nenvlist = py\n")
+    (tmp_path / ".env").write_text("open_rasterio=private\n")
+    sha = commit(tmp_path, "source")
+    (tmp_path / "xarray/backends/rasterio_.py").write_text("def open_rasterio():\n    return 'dirty worktree'\n")
+
+    async def run():
+        source = GitSnapshotSource(tmp_path, "pydata/xarray", sha)
+        tools = RepositoryEvidence(source)
+        query = "How does xarray implement the rasterio backend?"
+        skill = select_skill(query)
+        assert (await tools.find_paths(query, skill, []))[0] == "xarray/backends/rasterio_.py"
+        query_with_noise = "Where is the rasterio conversion implemented in xarray?"
+        paths = await tools.find_paths(query_with_noise, skill, [])
+        assert paths[0] == "xarray/backends/rasterio_.py" and "MANIFEST.in" not in paths
+        ci_query = "How does the CI pipeline execute testing?"
+        assert (await tools.find_paths(ci_query, select_skill(ci_query), []))[0] == "tox.ini"
+        initial = [await tools.read("xarray/backends/api.py", query, [])]
+        assert evidence_gap("Where is `open_rasterio` defined?", initial, skill, False) == "unresolved_identifier"
+
+        async def semantic(text):
+            assert text == "rasterio entry point"
+            return [{"file": "xarray/backends/rasterio_.py", "metadata": {"start_line": 1}}]
+
+        async def plan(messages):
+            payload = json.loads(messages[-1]["content"])
+            if not payload["previous_observations"]:
+                return json.dumps({"calls": [{"tool": "grep", "query": "open_rasterio"},
+                                             {"tool": "search_semantic", "query": "rasterio entry point"},
+                                             {"tool": "read_spans", "path": "../out.py"}]})
+            assert ".env" not in json.dumps(payload) and "dirty worktree" not in json.dumps(payload)
+            assert "xarray/backends/rasterio_.py" in json.dumps(payload)
+            return json.dumps({"calls": [{"tool": "read_spans", "path": "xarray/backends/rasterio_.py",
+                                          "start_line": 1, "end_line": 2}]})
+
+        result = await explore(query, "test gap", tools, initial, semantic, plan, timeout=5)
+        assert {call["tool"] for call in result.calls} == {"grep", "search_semantic", "read_spans"}
+        assert result.reads[0].spans[0]["content"] == "def open_rasterio():\n    return 'committed'"
+        assert result.reads[0].spans[0]["metadata"]["commit"] == sha
+
+        async def invalid_plan(_):
+            return '{"calls":[{"tool":"read_spans","path":"../private.txt","start_line":1,"end_line":2}]}'
+
+        rejected = await explore(query, "test", tools, initial, semantic, invalid_plan, timeout=3)
+        assert rejected.status == "invalid_plan" and not rejected.calls
+
+    asyncio.run(run())
+
+
+def test_jev_chooses_tools_and_source_targets_in_the_same_request(tmp_path, monkeypatch):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "known.py").write_text("placeholder = True\n")
+    (tmp_path / "routes.py").write_text("def plan_route():\n    return 'pinned implementation'\n")
+    (tmp_path / "fallbacks.py").write_text("def failover():\n    return 'fallback implementation'\n")
+    revision = commit(tmp_path, "initial tools")
+    (tmp_path / "routes.py").write_text("def plan_route():\n    return 'dirty worktree'\n")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "fixture")
+    requests = []
+
+    def answer(choice):
+        return {"choice": choice, "probabilities": {choice: 0.98}, "confidence": 0.9}
+
+    async def classify(*, model, state, questions):
+        assert state["commit"] == revision
+        assert "pinned implementation" not in json.dumps(state)
+        actions = questions["action"]["criteria"]
+        action = ("grep", "search_semantic", "read_spans", "read_spans")[len(requests)]
+        assert action in actions
+        if not requests:
+            assert set(actions) == {"grep", "search_semantic", "read_spans"}
+            assert state["candidate_arguments"]["grep"]["literal_1"] == "plan_route"
+            assert state["candidate_arguments"]["read_spans"] == {"file_1": "known.py"}
+        requests.append(questions)
+        answers = {"action": answer(action)}
+        if action == "grep":
+            answers[action] = answer("literal_1")
+        if action == "read_spans":
+            prefix = "routes.py" if len(requests) == 3 else "fallbacks.py"
+            options = state["candidate_arguments"][action]
+            assert questions[action]["criteria"] == dict.fromkeys(options)
+            answers[action] = answer(next(key for key, description in options.items() if description.startswith(prefix)))
+        return {"answers": answers}
+
+    monkeypatch.setattr(jev_gate, "request_choice", classify)
+
+    async def semantic(text):
+        return [{"file": "fallbacks.py", "metadata": {"start_line": 1}}]
+
+    async def run():
+        tools = RepositoryEvidence(GitSnapshotSource(tmp_path, "owner/repo", revision))
+        question = "Where does `plan_route` handle this behavioral fallback?"
+        result = await investigate_with_jev(question, tools, ["known.py"], semantic, timeout=5, choice_timeout=1)
+        assert [call["tool"] for call in result.calls] == ["grep", "search_semantic", "read_spans", "read_spans"]
+        assert [r.path for r in result.reads] == ["routes.py", "fallbacks.py"]
+        assert "pinned implementation" in result.reads[0].spans[0]["content"]
+        assert all(call["commit"] == revision for call in result.calls)
+        forced = await jev_gate.choose_tool({}, {"read_spans": "Read source"},
+                                            {"read_spans": {"file_1": "known.py"}}, timeout=1)
+        assert forced == jev_gate.ToolSelection("read_spans", "file_1") and len(requests) == 4
+
+    asyncio.run(run())
+
+
 def test_incremental_analysis_and_snapshot_chat(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     root.mkdir()
@@ -41,7 +160,7 @@ def test_incremental_analysis_and_snapshot_chat(tmp_path, monkeypatch):
     (root / "gone.py").write_text("def gone():\n    return 8\n")
     (root / "move.py").write_text("def relocated():\n    return 7\n")
     first = commit(root, "initial")
-    state = NS(head=first, fail_embeddings=False, lose_write_ack=False)
+    state = NS(head=first, fail_embeddings=False, lose_write_ack=False, checked_writer_lease=False)
     calls = NS(embedded=[], decisions=0, reports=0, answer_prompts=[], refs=[], sources=[])
 
     class Snapshots:
@@ -100,6 +219,11 @@ def test_incremental_analysis_and_snapshot_chat(tmp_path, monkeypatch):
     original_add = qdrant_store.QdrantVectorStore.add_documents
 
     async def add_documents(backend, documents, embeddings):
+        if not state.checked_writer_lease:
+            with pytest.raises(TimeoutError):
+                async with collection_lease(tmp_path, backend.collection_name, exclusive=True, timeout=0):
+                    pytest.fail("A writer's staged document must be protected from collection")
+            state.checked_writer_lease = True
         added = await original_add(backend, documents, embeddings)
         return 0 if state.lose_write_ack else added
 
@@ -123,6 +247,7 @@ def test_incremental_analysis_and_snapshot_chat(tmp_path, monkeypatch):
         try:
             first_events = await analyze()
             assert first_events[-1]["step"] == "finish", first_events[-1]
+            assert state.checked_writer_lease
             old_manifest = store.load_context()["snapshot_index"]
             old_view = store.snapshot_index(old_manifest)
             assert old_manifest["revision"] == first
@@ -170,6 +295,38 @@ def test_incremental_analysis_and_snapshot_chat(tmp_path, monkeypatch):
             assert not memory.recent_turns("browser-2", "owner/repo", second)
             assert not memory.recent_turns("browser-1", "owner/repo", first)
 
+            routed_searches = []
+
+            async def track_search(*args):
+                routed_searches.append(args)
+                return []
+
+            async def classify(*, model, state, questions):
+                assert state["commit"] == second
+                choices = questions["action"]["criteria"]
+                if "answer" in choices:
+                    return {"answers": {"action": {"choice": "answer", "probabilities": {"answer": 1}, "confidence": 1}}}
+                assert set(choices) >= {"read_spans", "search_semantic"}
+                candidates = state["candidate_arguments"]["read_spans"]
+                target = next(key for key, path in candidates.items() if path == ".github/workflows/ci.yml")
+                return {"answers": {"action": {"choice": "read_spans", "probabilities": {"read_spans": 1}, "confidence": 1},
+                                    "read_spans": {"choice": target}}}
+
+            with monkeypatch.context() as routed:
+                routed.setenv("JEV_MODE", "active")
+                routed.setenv("TYPESAFE_API_KEY", "fixture")
+                routed.setattr(jev_gate, "request_choice", classify)
+                routed.setattr(repo_index.SnapshotIndex, "search", track_search)
+                routed_output = "".join([fragment async for fragment in chat_service.process_chat_stream(
+                    "How does the CI workflow run lint?", "test-session", repo_url=REPO_URL,
+                    run_id="run-jev", config=chat_service.ChatConfig(exploration_mode="jev"),
+                )])
+            routed_data = chat_service.get_eval_data("run-jev")
+            assert routed_data.status == "completed" and len(calls.answer_prompts) == 2 and not routed_searches
+            assert routed_data.tool_calls[0]["tool"] == "read_spans" and routed_data.revision == second
+            assert "runs-on: ubuntu-latest" in routed_data.retrieved_context
+            assert f"/blob/{second}/.github/workflows/ci.yml#L1-L4" in routed_output
+
             matched = await calls.sources[-1].find_literal_paths(["stable_symbol"])
             assert matched == ["answer.py"]
             tools = RepositoryEvidence(calls.sources[-1])
@@ -193,8 +350,22 @@ def test_incremental_analysis_and_snapshot_chat(tmp_path, monkeypatch):
             replacement = store.load_context()["snapshot_index"]
             assert "renamed.py" not in replacement["tree"] and "new.py" in replacement["files"]
             assert "renamed.py" in {hit["file"] for hit in new_results}
+
+            backend = store.snapshot_index(replacement).backend
+            expired = set(new_manifest["files"]["renamed.py"]["docs"])
+            live = set(replacement["files"]["answer.py"]["docs"])
+            assert expired <= (await backend.retrieve_documents(list(expired))).keys()
+            async with pin_snapshot(store):
+                held = await collect(REPO_URL, apply=True, grace_seconds=0, keep=0)
+                assert held[replacement["namespace"]]["status"] == "in_flight"
+                assert expired <= (await backend.retrieve_documents(list(expired))).keys()
+            applied = await collect(REPO_URL, apply=True, grace_seconds=0, keep=0)
+            assert applied[replacement["namespace"]]["status"] == "collected"
+            assert not await backend.retrieve_documents(list(expired))
+            assert live <= (await backend.retrieve_documents(list(live))).keys()
         finally:
             chat_service.clear_eval_data("run-1")
+            chat_service.clear_eval_data("run-jev")
             await qdrant.close()
 
     asyncio.run(run())
@@ -233,9 +404,11 @@ def test_github_fallback_keeps_requested_revision_and_blob():
 
 def test_jev_only_accepts_a_valid_high_confidence_batch(monkeypatch):
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setenv("JEV_MODE", "shadow")
     choices = {"valid": "batch_2", "invalid": "unknown"}
     state = NS(which="valid")
     real_client = httpx.AsyncClient
+    created = []
 
     async def handle(request):
         assert request.headers["Authorization"] == "Bearer test"
@@ -247,11 +420,20 @@ def test_jev_only_accepts_a_valid_high_confidence_batch(monkeypatch):
             "choice": choice, "confidence": 0.9, "probabilities": {choice: 0.93},
         }}})
 
-    def client():
-        return real_client(transport=httpx.MockTransport(handle))
+    def client(**kwargs):
+        instance = real_client(transport=httpx.MockTransport(handle), **kwargs)
+        created.append(instance)
+        return instance
 
     monkeypatch.setattr(jev_gate.httpx, "AsyncClient", client)
     batches = {"batch_1": ["alpha.py"], "batch_2": ["beta.py"]}
-    assert asyncio.run(jev_gate.choose_batch("where?", [], batches)) == "batch_2"
-    state.which = "invalid"
-    assert asyncio.run(jev_gate.choose_batch("where?", [], batches)) is None
+
+    async def run():
+        async with jev_gate.connection_pool():
+            assert await jev_gate.choose_batch("where?", [], batches) == "batch_2"
+            state.which = "invalid"
+            assert await jev_gate.choose_batch("where?", [], batches) is None
+            assert len(created) == 1 and not created[0].is_closed
+        assert created[0].is_closed
+
+    asyncio.run(run())

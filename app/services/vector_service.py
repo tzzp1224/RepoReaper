@@ -27,6 +27,7 @@ from rank_bm25 import BM25Okapi
 from app.core.config import settings
 from app.storage.base import Document, SearchResult, CollectionStats
 from app.storage.qdrant_store import QdrantVectorStore, QdrantConfig, get_qdrant_factory
+from app.storage.snapshot_leases import pin_snapshot
 from app.utils.embedding import get_embedding_service, EmbeddingConfig
 from app.utils.locking import AtomicJsonFileStore
 
@@ -315,10 +316,20 @@ class VectorStore:
         def publish(state: dict) -> None:
             if state.get("snapshot_index") != previous:
                 raise RuntimeError("The active snapshot changed while preparing the update")
+            if previous and previous != manifest:
+                old_ids = {doc for item in previous["files"].values() for doc in item["docs"]}
+                if previous["namespace"] == manifest["namespace"]:
+                    old_ids -= {doc for item in manifest["files"].values() for doc in item["docs"]}
+                state.setdefault("retired_snapshots", []).append({
+                    "revision": previous["revision"], "namespace": previous["namespace"],
+                    "retired_at": time.time(), "document_ids": sorted(old_ids),
+                    "repo_url": state.get("repo_url", repo_url),
+                })
             for key in ("artifacts", "index_failures"):
                 state.pop(key, None)
             state.update(repo_url=repo_url, global_context=context, snapshot_index=manifest,
-                         reports={language: report}, report=report, report_language=language)
+                         reports={language: report}, report=report, report_language=language,
+                         snapshot_published_at=self._now_iso())
 
         published = await asyncio.to_thread(self._update_context_file, publish, op_name="Publish repository snapshot")
         if not published:
@@ -720,9 +731,9 @@ class VectorStore:
             搜索结果列表
         """
         top_k = top_k or config.default_top_k
-        state = self.load_context() or {}
-        if state.get("snapshot_index"):
-            return await self.snapshot_index(state["snapshot_index"]).search(query, top_k)
+        async with pin_snapshot(self) as state:
+            if state.get("snapshot_index"):
+                return await self.snapshot_index(state["snapshot_index"]).search(query, top_k)
         await self.initialize()
         query_vector = await self.embed_text(query)
         return await self.search_index(query, top_k, (self._bm25, self._doc_store), self._qdrant,

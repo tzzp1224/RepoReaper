@@ -22,7 +22,7 @@ python -m evaluation.benchmark clone --run evaluation/benchmark_runs/interview -
 fetch 固定 Hugging Face 数据集 revision 和官方评分提示词 Git commit、SHA256。
 prepare 每仓库按种子 42 的 SHA256 排序选 1 题开发、4 题候选正式样本；标记一题用于证据标注和重复运行。
 生成清单只有问题与仓库元数据，参考答案写入独立 `references.json`，不传入生成子进程。
-这种分离是应用接口约束，不是针对恶意代码的操作系统沙箱；本项目不执行外部工具命令。
+问题生成与评分通过不同的应用接口运行。仓库工具只读 Git 对象与已索引数据，评测期间不执行目标仓库的代码。
 
 ## 费用与运行
 
@@ -83,8 +83,46 @@ failure_category 使用 `index_coverage`、`retrieval_miss`、`truncation`、`pa
 其中 JIT 必要文件命中率只是必要证据覆盖的代理指标；文件被读到不代表推理一定使用正确。
 均摊费用按 B/C/D 各自作为独立系统承担整个种子构建成本计算，A 不承担种子成本；实际实验总账只收取一次构建。
 
-本仓库已有 63 题黄金集是本项目开发回归集，不作为跨仓库泛化成绩；现有 71 项离线测试不代表真实回答准确率。
-没有实跑结果时，简历中的 X/Y/Z/T 必须保持空缺。需要展示的三类案例：JIT 有效、JIT 无效、答案错误；允许实验无提升。
+本仓库的 63 题黄金集用于开发回归。跨仓库结论应使用单独留出的样本，并同时报告 JIT 有效、无效和答案错误的案例。
 
 来源：[数据集](https://huggingface.co/datasets/TIGER-Lab/SWE-QA-Pro-Bench)、
 [官方评测](https://github.com/TIGER-AI-Lab/SWE-QA-Pro/tree/main/eval)。
+
+## C/F/G JIT 对照试跑
+
+- `C` 跑旧多轮 JIT。`F` 跑新版原始源码片段流程。`G` 使用与 `F` 相同的流程，在存在多个候选批次时允许 Jev 改选。
+- 三组从同一个已封存的旧索引复制起点。`F` 和 `G` 使用它提供初始检索线索，再回到同一 Git SHA 读取原始片段。这个对照测量问答链路，生产版的增量建库需单独评估。
+- `prepare-jit` 在每个指定仓库选一条未出现在旧清单中的题目。先在 `evidence_labels.json` 标注必要文件，再运行生成。评分器只接收测试题、参考答案和候选答案；TypeSafe 只接收问题和候选路径。组顺序按题轮换。
+- `G` 使用进程内的 `active`，用户 `.env` 的模式与生产超时保持原样。Jev 的调用、时限、获选批次和 token 单独记录，并使用同一个费用账本。`--rates` 增加 `jev` 费率项，格式与 `generation` 相同。
+
+```bash
+python -m evaluation.benchmark prepare-jit --data evaluation/benchmark_data/sweqa \
+  --run evaluation/benchmark_runs/jit-pilot --seed-run evaluation/benchmark_runs/interview \
+  --repo mkdocs/mkdocs --repo getsentry/responses
+python -m evaluation.benchmark run --run evaluation/benchmark_runs/jit-pilot \
+  --repos evaluation/benchmark_repos --seed-run evaluation/benchmark_runs/interview \
+  --rates /absolute/path/rates.json --split dev --budget 10 \
+  --model deepseek-flash --jev-model jev-1.14.0 --jev-timeout 1.5
+python -m evaluation.benchmark judge --run evaluation/benchmark_runs/jit-pilot --split dev
+python -m evaluation.benchmark report --run evaluation/benchmark_runs/jit-pilot --split dev
+```
+
+报告同时保留各组的失败分母、最终答案首字时间、端到端时延、token 用量、证据文件覆盖和 Jev 改选次数。开发试跑的结果用于决定后续样本和策略。小样本 p95 仅作描述。
+
+`prepare-jit --experiment exploration --exclude-run <previous-pilot>` 生成 F/H/I 对照。F 使用旧路径排序，H 使用组件词拆分及去仓库名的路径排序，I 在 H 的基础上允许模型进行有界工具探索。这三组禁用 Jev，使用同一封存索引、问题快照和评分规则。可多次传递 `--exclude-run` 排除以往清单。
+
+```bash
+python -m evaluation.benchmark prepare-jit --experiment exploration \
+  --data evaluation/benchmark_data/sweqa --seed-run evaluation/benchmark_runs/interview \
+  --exclude-run evaluation/benchmark_runs/jit-pilot --run evaluation/benchmark_runs/jit-exploration \
+  --repo mkdocs/mkdocs --repo getsentry/responses
+python -m evaluation.benchmark run --run evaluation/benchmark_runs/jit-exploration \
+  --repos evaluation/benchmark_repos --seed-run evaluation/benchmark_runs/interview \
+  --rates /absolute/path/rates.json --model deepseek-flash --split dev --budget 10
+python -m evaluation.benchmark judge --run evaluation/benchmark_runs/jit-exploration --split dev
+python -m evaluation.benchmark report --run evaluation/benchmark_runs/jit-exploration --split dev
+```
+
+`--experiment source` 生成 H/K/L 对照。H 使用前一轮的组件词排序，K 增加实现路径优先级、CI 配置优先级和三个候选文件的读取批次，L 在 K 上打开模型探索。使用 `--exclude-run` 排除前两轮试跑，保持同一个种子来源和评分器。
+
+`--experiment tools` 生成 K/L/M 对照。K 使用规则召回，L 使用相同的首轮规则召回并允许 LLM 补充探索，M 从首轮开始由 Jev 选择工具和候选参数。M 使用配置在 `--jev-model` 的模型，运行命令加 `--jev-timeout 1.5` 可复现实验超时。报告单列实际执行的 Jev 动作、决策耗时和规划 token，以及端到端质量与时延。L 的非流式请求含查询重写（若触发）和工具规划。

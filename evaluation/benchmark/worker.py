@@ -86,7 +86,7 @@ async def execute(job):
     if job.get("model"):
         os.environ["MODEL_NAME"] = job["model"]
     from app.core.config import settings
-    from app.services import agent_service, chat_service, vector_service
+    from app.services import agent_service, chat_service, jev_gate, vector_service
     from app.services.repository_source import GitSnapshotSource, use_repository_source
     from app.storage.qdrant_store import close_shared_client
     from app.utils.llm_client import client
@@ -97,6 +97,11 @@ async def execute(job):
     if client is None:
         raise ValueError("Generation client unavailable")
     meter = Meter(Ledger(job["ledger"], job["budget_cny"]), job["job_id"], job["phase"], job["rates"])
+    if job.get("variant") in ("G", "M"):
+        os.environ.update(JEV_MODE="active", JEV_MODEL=job["jev_model"])
+        jev_gate.request_choice = meter.wrap(jev_gate.request_choice, "jev")
+    else:
+        os.environ["JEV_MODE"] = "off"
     # SDK retries would otherwise be invisible. The existing application retry
     # policy remains active, and every attempt now has a durable ledger row.
     client._client = client._client.with_options(max_retries=0)
@@ -169,10 +174,27 @@ async def execute(job):
                     cfg.max_jit_rounds = 0
                 elif job["variant"] == "D":
                     cfg.rewrite_query = False
-                with Path("stream.txt").open("w") as output:
-                    async for text in chat_service.process_chat_stream(job["question"], session_id, config=cfg):
-                        output.write(text)
-                result = asdict(chat_service.get_eval_data(session_id))
+                path_rankings = {"F": "legacy", "G": "legacy", "H": "components", "I": "components",
+                                 "K": "source", "L": "source", "M": "source"}
+                comparison = job["variant"] in path_rankings
+                kwargs = {}
+                if comparison:
+                    cfg.jev_timeout = job["jev_timeout"]
+                    cfg.jev_router_timeout = job["jev_timeout"]
+                    cfg.path_ranking = path_rankings[job["variant"]]
+                    cfg.exploration_mode = {"I": "auto", "L": "auto", "M": "jev"}.get(job["variant"], "off")
+                    trace_id = chat_service.tracing_service.start_trace("jit_comparison", session_id)
+                    kwargs = {"run_id": trace_id, "repo_url": f"https://github.com/{source.repo}", "compare_seed": True}
+                async with jev_gate.connection_pool():
+                    with Path("stream.txt").open("w") as output:
+                        async for text in chat_service.process_chat_stream(job["question"], session_id, config=cfg, **kwargs):
+                            output.write(text)
+                result = asdict(chat_service.get_eval_data(trace_id if comparison else session_id))
+                if comparison:
+                    tracer = chat_service.tracing_service
+                    result["jev_decisions"] = [json.loads(step["payload_json"]) for step in
+                        tracer.runtime_store.list_steps(trace_id) if step["step_name"] == "jev_decision"]
+                    tracer.end_trace({"stream_completed": result["status"] == "completed"})
                 result["index_failures"] = store.index_failures
                 result["chat_config"] = asdict(cfg)
     finally:

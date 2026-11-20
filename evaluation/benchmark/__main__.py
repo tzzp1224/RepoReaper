@@ -18,6 +18,13 @@ def main():
     prep.add_argument("--data", required=True)
     prep.add_argument("--run", required=True)
     prep.add_argument("--per-repo", type=int, choices=[2, 4], default=4)
+    prep_jit = commands.add_parser("prepare-jit", help="Freeze unused questions against earlier sealed seeds")
+    prep_jit.add_argument("--data", required=True)
+    prep_jit.add_argument("--run", required=True)
+    prep_jit.add_argument("--seed-run", required=True)
+    prep_jit.add_argument("--repo", action="append", required=True)
+    prep_jit.add_argument("--experiment", choices=["jev", "exploration", "source", "tools"], default="jev")
+    prep_jit.add_argument("--exclude-run", action="append", default=[])
     clone = commands.add_parser("clone", help="Fetch repository objects at exact benchmark commits")
     clone.add_argument("--run", required=True)
     clone.add_argument("--repos", required=True)
@@ -30,6 +37,9 @@ def main():
     run.add_argument("--budget", type=float, default=450)
     run.add_argument("--timeout", type=int, default=600)
     run.add_argument("--model", help="Explicit offline-only model override, frozen for all groups")
+    run.add_argument("--seed-run", help="Sealed legacy indexes for the JIT comparison")
+    run.add_argument("--jev-timeout", type=float, default=0.45)
+    run.add_argument("--jev-model", default="jev-latest")
     run_e = commands.add_parser("run-e", help="Run resumable full-index one-shot E baseline only")
     run_e.add_argument("--run", required=True)
     run_e.add_argument("--source-run", required=True)
@@ -63,6 +73,16 @@ def main():
                          args.run, args.per_repo)
         shutil.copyfile(data / "judge_prompt.txt", Path(args.run) / "judge_prompt.txt")
         result = {"manifest_hash": result["manifest_hash"], "samples": len(result["samples"])}
+    elif args.command == "prepare-jit":
+        from .data import load_manifest, prepare_jit
+        data = Path(args.data)
+        result = prepare_jit(read_json(data / "dataset.json"), read_json(data / "provenance.json"),
+                             load_manifest(Path(args.seed_run) / "manifest.json"), args.run, args.repo,
+                             experiment=args.experiment,
+                             excluded_manifests=tuple(load_manifest(Path(run) / "manifest.json")
+                                                      for run in args.exclude_run))
+        shutil.copyfile(data / "judge_prompt.txt", Path(args.run) / "judge_prompt.txt")
+        result = {"manifest_hash": result["manifest_hash"], "samples": len(result["samples"])}
     elif args.command == "clone":
         from .runner import clone_repos
         clone_repos(read_json(Path(args.run) / "manifest.json"), args.repos)
@@ -74,7 +94,8 @@ def main():
         if args.repeats and args.split != "test":
             parser.error("Repeats apply only to formal test samples")
         result = run_jobs(args.run, args.repos, read_json(args.rates), args.split,
-                          args.repeats, args.budget, args.timeout, args.model)
+                          args.repeats, args.budget, args.timeout, args.model, seed_run=args.seed_run,
+                          jev_timeout=args.jev_timeout, jev_model=args.jev_model)
     elif args.command == "run-e":
         from .full_static import run_full_static
         result = run_full_static(args.run, args.source_run, args.repos, read_json(args.rates),

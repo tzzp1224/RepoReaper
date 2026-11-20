@@ -17,6 +17,13 @@ class BlobEntry:
     size: int
 
 
+@dataclass(frozen=True)
+class GrepHit:
+    path: str
+    line: int
+    preview: str
+
+
 def decode_text(data: bytes) -> str | None:
     if b"\x00" in data:
         return None
@@ -143,3 +150,38 @@ class GitSnapshotSource:
             return []
         prefix = self.revision.encode() + b":"
         return [path.removeprefix(prefix).decode("utf-8", errors="replace") for path in result.split(b"\0") if path]
+
+    async def grep_literal(self, literal: str, scope: str = "") -> list[GrepHit]:
+        """Search committed blobs with a fixed string and bounded subprocess output."""
+        args = ["git", "--no-replace-objects", "--literal-pathspecs", "-C", str(self.root),
+                "grep", "-InzFi", "-m", "2", "-e", literal, self.revision, "--"]
+        if scope:
+            args.append(scope)
+        process = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE,
+                                                       stderr=asyncio.subprocess.DEVNULL)
+        try:
+            output = await asyncio.wait_for(process.stdout.readexactly(128 * 1024), 1.5)
+        except asyncio.IncompleteReadError as exc:
+            output = exc.partial
+        finally:
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            await process.communicate()
+
+        prefix = self.revision.encode() + b":"
+        hits = []
+        for record in output.split(b"\n"):
+            path, separator, rest = record.partition(b"\0")
+            number, _, text = rest.partition(b"\0")
+            if not separator or not path.startswith(prefix) or not number.isdigit():
+                continue
+            try:
+                relative_path = path[len(prefix):].decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            preview = text[:320].decode("utf-8", errors="replace").strip()
+            hits.append(GrepHit(relative_path, int(number), preview))
+        return hits

@@ -10,6 +10,7 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 
 class BudgetExceeded(RuntimeError):
@@ -69,7 +70,10 @@ class Meter:
             for key in ("input_cny_per_million", "output_cny_per_million"):
                 if type(rates.get(key)) not in (int, float) or rates[key] < 0 or not math.isfinite(rates[key]):
                     raise ValueError("Missing or invalid pricing")
-            payload = kwargs.get("messages", kwargs.get("input", []))
+            if kind == "jev":
+                payload = {key: kwargs[key] for key in ("state", "questions")}
+            else:
+                payload = kwargs.get("messages", kwargs.get("input", []))
             serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
             upper_input = len(serialized.encode()) + 4096
             upper_output = kwargs.get("max_tokens", kwargs.get("max_output_tokens", 4096)) if kind != "embedding" else 0
@@ -78,7 +82,7 @@ class Meter:
             call_id = self.ledger.reserve(self.job, self.phase, reserve, {
                 "kind": kind, "requested_model": kwargs.get("model"),
                 "prompt_sha256": hashlib.sha256(serialized.encode()).hexdigest(),
-                "request_config": {k: v for k, v in kwargs.items() if k not in ("messages", "input")},
+                "request_config": {k: v for k, v in kwargs.items() if k not in ("messages", "input", "state", "questions")},
                 "input_tokens_upper_bound": upper_input, "output_tokens_upper_bound": upper_output})
             start = time.perf_counter()
             usage = None
@@ -88,6 +92,11 @@ class Meter:
 
             def observe(response):
                 nonlocal usage, response_id, returned_model, output_chars
+                if kind == "jev":
+                    returned_model = response.get("model")
+                    raw_usage = response.get("usage")
+                    usage = SimpleNamespace(**raw_usage) if isinstance(raw_usage, dict) else None
+                    return
                 response_id = getattr(response, "id", response_id)
                 returned_model = getattr(response, "model", returned_model)
                 usage = getattr(response, "usage", None) or usage

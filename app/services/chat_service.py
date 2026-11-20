@@ -4,6 +4,7 @@ import asyncio
 import os
 import re
 import time
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Dict, Optional, AsyncGenerator, List, Set
 from urllib.parse import quote
@@ -13,9 +14,13 @@ from app.services.vector_service import store_manager
 from app.services.github_service import get_file_content, get_github_service
 from app.services import jev_gate
 from app.services.repository_evidence import RepositoryEvidence, build_evidence, select_skill
+from app.services.repo_explorer import evidence_gap, explore
+from app.services.repo_tool_router import investigate_with_jev
+from app.services.repository_source import bound_source
 from app.services.chunking_service import UniversalChunker, ChunkingConfig
 from app.services.tracing_service import tracing_service
 from app.storage.runtime_store import runtime_trace_store
+from app.storage.snapshot_leases import pin_snapshot
 from app.utils.session import get_conversation_memory, ConversationMemory, normalize_repo_url
 
 
@@ -46,6 +51,11 @@ class ChatConfig:
     # 调试配置
     show_debug_info: bool = False     # 是否显示调试信息
     rewrite_query: bool = True        # 离线消融开关；生产默认行为保持开启
+    jev_timeout: float = 0.45
+    jev_shadow_timeout: float = 1.5
+    jev_router_timeout: float = 1.5
+    path_ranking: str = "source"
+    exploration_mode: str = field(default_factory=lambda: os.getenv("REPO_EXPLORATION_MODE", "off").strip().lower())
 
 
 # 全局配置实例
@@ -67,6 +77,12 @@ class ChatResult:
     error: Optional[str] = None
     jit_rounds: int = 0
     revision: str | None = None
+    first_answer_token_ms: float | None = None
+    initial_files: list[str] | None = None
+    candidate_batches: dict[str, list[str]] = field(default_factory=dict)
+    selected_batch: str | None = None
+    exploration_rounds: int = 0
+    exploration_status: str | None = None
 
 
 # === 评估数据存储 (供 main.py 获取) ===
@@ -133,16 +149,18 @@ async def _rewrite_query(user_query: str):
         return user_query # 降级：直接用原句
 
 async def process_chat_stream(user_query: str, session_id: str, *, config: Optional[ChatConfig] = None,
-                              run_id: str | None = None, repo_url: str = "", conversation_id: str | None = None):
+                              run_id: str | None = None, repo_url: str = "", conversation_id: str | None = None,
+                              compare_seed: bool = False):
     """Backward-compatible text stream with an explicit terminal evaluation record."""
     result_key = run_id or session_id
     clear_eval_data(result_key)
     try:
         stream = (_snapshot_chat_stream(user_query, session_id, run_id, repo_url, conversation_id,
-                                        config or chat_config) if run_id else
+                                        config or chat_config, compare_seed) if run_id else
                   _process_chat_stream(user_query, session_id, config=config))
-        async for text in stream:
-            yield text
+        async with aclosing(stream):
+            async for text in stream:
+                yield text
     except asyncio.CancelledError:
         _eval_data_store[result_key] = ChatResult("", "", 0, status="cancelled")
         raise
@@ -154,9 +172,17 @@ async def process_chat_stream(user_query: str, session_id: str, *, config: Optio
             _eval_data_store[result_key] = ChatResult("", "", 0, status="error", error="No terminal answer")
 
 
-async def _snapshot_chat_stream(query, session_id, run_id, repo_url, conversation_id, cfg):
+async def _snapshot_chat_stream(query, session_id, run_id, repo_url, conversation_id, cfg, compare_seed):
+    start = time.perf_counter()
     store = store_manager.get_store(session_id)
-    state = await asyncio.to_thread(store.load_context) or {}
+    async with pin_snapshot(store) as state:
+        async with aclosing(_answer_snapshot(query, run_id, repo_url, conversation_id, cfg,
+                                             compare_seed, store, state, start)) as stream:
+            async for chunk in stream:
+                yield chunk
+
+
+async def _answer_snapshot(query, run_id, repo_url, conversation_id, cfg, compare_seed, store, state, start):
     saved_url = state.get("repo_url")
     if saved_url and repo_url and normalize_repo_url(saved_url) != normalize_repo_url(repo_url):
         raise ValueError("The session belongs to a different repository")
@@ -164,8 +190,9 @@ async def _snapshot_chat_stream(query, session_id, run_id, repo_url, conversatio
         yield "Please analyze a repository first."
         return
     repo_url = saved_url
+    if compare_seed and bound_source(repo_url) is None:
+        raise ValueError("Benchmark seed retrieval requires a bound repository snapshot")
 
-    start = time.perf_counter()
     deadline = start + 90
     manifest = state.get("snapshot_index")
     source = await asyncio.wait_for(get_github_service().open_snapshot(
@@ -182,55 +209,76 @@ async def _snapshot_chat_stream(query, session_id, run_id, repo_url, conversatio
     search_query = query[:4000]
     if history and re.search(r"\b(it|that|this|those)\b|这个|那个|它|上述", query, re.I):
         search_query = history[-1][0][:240] + "\n" + search_query
-    tools = RepositoryEvidence(source)
+    tools = RepositoryEvidence(source, path_ranking=cfg.path_ranking)
     skill = select_skill(search_query)
     tree = await source.manifest()
 
     async def retrieve(text):
-        if manifest:
+        if manifest or compare_seed:
             try:
-                return await asyncio.wait_for(store.snapshot_index(manifest).search(text, cfg.retrieval_top_k), 2.5)
+                search = store.snapshot_index(manifest).search if manifest else store.search_hybrid
+                return await asyncio.wait_for(search(text, cfg.retrieval_top_k), 2.5)
             except Exception as exc:
                 tracing_service.add_event("snapshot_retrieval_fallback", {"error": type(exc).__name__})
         return []
 
     explicit = any(token in tree for token in re.findall(r"[\w./-]+\.[\w-]+", search_query))
-    if explicit or skill.path_prefix:
-        paths = await tools.find_paths(search_query, skill, [])
-        indexed = [] if paths else await retrieve(search_query)
-    else:
-        indexed, paths = await asyncio.gather(retrieve(search_query), tools.find_paths(search_query, skill, []))
-    if not paths and not indexed and cfg.rewrite_query:
-        try:
-            rewrite = await asyncio.wait_for(_rewrite_query(search_query), 1.5)
-            if rewrite != search_query:
-                indexed, paths = await asyncio.gather(retrieve(rewrite), tools.find_paths(rewrite, skill, []))
-                search_query += "\n" + rewrite
-        except asyncio.TimeoutError:
-            tracing_service.add_event("query_rewrite_timeout", {})
-
-    indexed_paths = list(dict.fromkeys(item["file"] for item in indexed))[:2]
-    fresh = [path for path in paths if path not in indexed_paths]
-    batches = {f"batch_{i // 2 + 1}": fresh[i:i + 2] for i in range(0, min(len(fresh), 6), 2)}
-    selected = next(iter(batches), None)
     mode = os.getenv("JEV_MODE", "off").lower()
-    if len(batches) > 1 and not explicit and not skill.path_prefix:
-        if mode == "active":
-            selected = await jev_gate.choose_batch(search_query, indexed_paths, batches) or selected
-        elif mode == "shadow":
-            jev_gate.observe_batch(search_query, indexed_paths, batches)
+    route_enabled = cfg.exploration_mode == "jev"
+    exploration = None
+    if route_enabled and mode in {"active", "shadow"} and os.getenv("TYPESAFE_API_KEY"):
+        routed_query = search_query
+        candidates = await tools.find_paths(routed_query, skill, [], lookup_symbols=False)
+        search = retrieve if manifest or compare_seed else None
 
-    planned = list(dict.fromkeys([*(batches.get(selected) or []), *indexed_paths]))
-    yield "> 正在读取当前提交的源码证据…\n\n" if is_chinese_query(query) else "> Reading source at the selected commit…\n\n"
-    results = await tools.read_batch(planned, search_query, indexed)
-    remaining = []
-    if not any(result.spans for result in results):
-        remaining = [path for path in paths if path not in planned][:2]
-    elif skill.follow_references:
-        remaining = await tools.related_paths(results, search_query)
-    if remaining:
-        results.extend(await tools.read_batch(remaining, search_query, indexed))
-    context, evidence = build_evidence(results)
+        async def route(*, shadow=False):
+            return await investigate_with_jev(routed_query, tools, candidates, search,
+                                              timeout=max(0, min(9, deadline - time.perf_counter() - 20)),
+                                              choice_timeout=cfg.jev_router_timeout, shadow=shadow)
+
+        if mode == "active":
+            yield "> 正在定位当前提交的源码证据…\n\n" if is_chinese_query(query) else "> Locating evidence at the selected commit…\n\n"
+            exploration = await route()
+        else:
+            jev_gate.observe_choice(lambda: route(shadow=True))
+
+    results, indexed, planned, remaining = [], [], [], []
+    batches, selected = {}, None
+    if exploration is None or not exploration.reads or exploration.status == "router_unavailable":
+        if explicit or skill.path_prefix:
+            paths = await tools.find_paths(search_query, skill, [])
+            indexed = [] if paths else await retrieve(search_query)
+        else:
+            indexed, paths = await asyncio.gather(retrieve(search_query), tools.find_paths(search_query, skill, []))
+        if not paths and not indexed and cfg.rewrite_query and not (route_enabled and mode == "active"):
+            try:
+                rewrite = await asyncio.wait_for(_rewrite_query(search_query), 1.5)
+                if rewrite != search_query:
+                    indexed, paths = await asyncio.gather(retrieve(rewrite), tools.find_paths(rewrite, skill, []))
+                    search_query += "\n" + rewrite
+            except asyncio.TimeoutError:
+                tracing_service.add_event("query_rewrite_timeout", {})
+
+        indexed_paths = list(dict.fromkeys(item["file"] for item in indexed))[:2]
+        fresh = [path for path in paths if path not in indexed_paths]
+        batch_size = 3 if cfg.path_ranking == "source" else 2
+        batches = {f"batch_{i // batch_size + 1}": fresh[i:i + batch_size] for i in range(0, min(len(fresh), 6), batch_size)}
+        selected = next(iter(batches), None)
+        if not route_enabled and len(batches) > 1 and not explicit and not skill.path_prefix:
+            if mode == "active":
+                selected = await jev_gate.choose_batch(search_query, indexed_paths, batches, timeout=cfg.jev_timeout) or selected
+            elif mode == "shadow":
+                jev_gate.observe_batch(search_query, indexed_paths, batches, timeout=cfg.jev_shadow_timeout)
+
+        planned = list(dict.fromkeys([*(batches.get(selected) or []), *indexed_paths]))
+        yield "> 正在读取当前提交的源码证据…\n\n" if is_chinese_query(query) else "> Reading source at the selected commit…\n\n"
+        results = await tools.read_batch(planned, search_query, indexed)
+        if not any(result.spans for result in results):
+            remaining = [path for path in paths if path not in planned][:2]
+        elif skill.follow_references:
+            remaining = await tools.related_paths(results, search_query)
+        if remaining:
+            results.extend(await tools.read_batch(remaining, search_query, indexed))
     tool_calls = [{"path": result.path, "status": result.status, "commit": source.revision,
                    "latency_ms": result.latency_ms}
                   for result in results]
@@ -238,6 +286,28 @@ async def _snapshot_chat_stream(query, session_id, run_id, repo_url, conversatio
         tracing_service.record_tool_call("repo.read_spans", result, {"status": result["status"]},
                                         latency_ms=result["latency_ms"],
                                         success=result["status"] in {"ok", "empty"})
+
+    gap = evidence_gap(search_query, results, skill, explicit, source.repo, cfg.path_ranking) if cfg.exploration_mode == "auto" else None
+    if gap and client:
+        yield "> 正在进一步定位源码…\n\n" if is_chinese_query(query) else "> Checking additional source locations…\n\n"
+
+        async def plan(messages):
+            response = await client.chat.completions.create(
+                model=settings.default_model_name, messages=messages, temperature=0.1, max_tokens=320,
+            )
+            return response.choices[0].message.content or ""
+
+        exploration = await explore(search_query, gap, tools, results, retrieve, plan,
+                                    timeout=max(0, min(10, deadline - time.perf_counter() - 20)))
+    if exploration:
+        tool_calls.extend(exploration.calls)
+        for call in exploration.calls:
+            tracing_service.record_tool_call(f"repo.{call['tool']}", call, {"status": call["status"]},
+                                             latency_ms=call["latency_ms"], success=call["success"])
+        tracing_service.add_event("repo_exploration_completed", {"reason": gap or "jev_router", "rounds": exploration.rounds,
+                                  "outcome": exploration.status, "source_reads": len(exploration.reads)})
+        results = [*exploration.reads, *results]
+    context, evidence = build_evidence(results)
 
     retrieval_ms = (time.perf_counter() - start) * 1000
     tracing_service.add_event("snapshot_evidence_ready", {"commit": source.revision, "spans": len(evidence),
@@ -259,6 +329,7 @@ async def _snapshot_chat_stream(query, session_id, run_id, repo_url, conversatio
     output = []
     usage = None
     finish_reason = None
+    ttft = None
     try:
         while True:
             try:
@@ -305,7 +376,12 @@ async def _snapshot_chat_stream(query, session_id, run_id, repo_url, conversatio
                                         retrieval_ms, tool_calls=tool_calls, evidence=evidence,
                                         status="completed" if complete else "incomplete" if answer else "empty_answer",
                                         revision=source.revision,
-                                        jit_rounds=int(bool(planned)) + int(bool(remaining)))
+                                        jit_rounds=int(bool(planned)) + int(bool(remaining)),
+                                        first_answer_token_ms=ttft if complete else None,
+                                        initial_files=list(dict.fromkeys(item["file"] for item in indexed)),
+                                        candidate_batches=batches, selected_batch=selected,
+                                        exploration_rounds=exploration.rounds if exploration else 0,
+                                        exploration_status=exploration.status if exploration else None)
 
 
 async def _process_chat_stream(user_query: str, session_id: str, *, config: Optional[ChatConfig] = None):
@@ -319,6 +395,7 @@ async def _process_chat_stream(user_query: str, session_id: str, *, config: Opti
     4. 如果请求文件，加载后继续对话 (最多 max_jit_rounds 轮)
     5. 最终生成答案并保存到对话记忆
     """
+    started = time.perf_counter()
     vector_db = store_manager.get_store(session_id)
     cfg = config or chat_config
     
@@ -409,6 +486,7 @@ async def _process_chat_stream(user_query: str, session_id: str, *, config: Opti
         generation_start = time.time()
         
         # === 多轮 JIT 循环 ===
+        first_answer_token_ms = None
         while jit_round <= cfg.max_jit_rounds:
             is_final_round = (jit_round == cfg.max_jit_rounds)
             
@@ -435,6 +513,7 @@ async def _process_chat_stream(user_query: str, session_id: str, *, config: Opti
             
             buffer = ""
             round_response = ""
+            round_ttft = None
             requested_files: List[str] = []
             
             async for chunk in stream:
@@ -443,6 +522,8 @@ async def _process_chat_stream(user_query: str, session_id: str, *, config: Opti
                 content = chunk.choices[0].delta.content or ""
                 if not content:
                     continue
+                if round_ttft is None:
+                    round_ttft = (time.perf_counter() - started) * 1000
                 
                 buffer += content
                 round_response += content
@@ -478,6 +559,7 @@ async def _process_chat_stream(user_query: str, session_id: str, *, config: Opti
                                       flags=re.DOTALL).strip()
                 # Never score a truncated tool request as an answer.
                 final_answer = final_answer.split("<tool_code>", 1)[0].strip()
+                first_answer_token_ms = round_ttft if final_answer and not round_response.lstrip().startswith("<tool_code>") else None
                 # 没有新文件请求，或已达最大轮数，结束循环
                 break
             
@@ -566,6 +648,7 @@ async def _process_chat_stream(user_query: str, session_id: str, *, config: Opti
             process_text=collected_response, rounds=rounds, tool_calls=tool_calls,
             evidence=evidence, jit_rounds=jit_round,
             status="completed" if final_answer else "empty_answer",
+            first_answer_token_ms=first_answer_token_ms,
         )
         print(f"📦 [EvalData] Session {session_id}: {len(collected_context)} chars context, {len(collected_response)} chars answer, {jit_round} JIT rounds, {memory.get_turn_count()} turns")
 

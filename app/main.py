@@ -26,6 +26,7 @@ from app.core.config import settings, auto_eval_config as runtime_auto_eval_conf
 logger = logging.getLogger(__name__)
 from app.services.agent_service import agent_stream
 from app.services.chat_service import process_chat_stream, get_eval_data, clear_eval_data
+from app.services.jev_gate import connection_pool as jev_connection_pool
 from app.services.insights_service import issue_summary_stream, commit_roadmap_stream
 from app.services.chat_questions_service import get_suggested_questions
 from app.services.vector_service import store_manager
@@ -34,6 +35,7 @@ from app.services.auto_evaluation_service import (
     get_auto_evaluation_service,
 )
 from app.services.tracing_service import tracing_service
+from app.services.repo_refresh_service import MAX_BODY_BYTES, RepoRefreshService, webhook_enabled
 from evaluation.evaluation_framework import EvaluationEngine, EvaluationResult, DataRoutingEngine
 from datetime import datetime
 
@@ -47,9 +49,15 @@ async def lifespan(app: FastAPI):
     
     # 启动时运行
     print("🚀 Application starting...")
-    # 仓库数据永久存储，对话记忆纯内存存储（重启自动清空）
-    
-    yield
+    async with jev_connection_pool():
+        app.state.repo_refresh = RepoRefreshService() if webhook_enabled() else None
+        worker = asyncio.create_task(app.state.repo_refresh.worker()) if app.state.repo_refresh else None
+        try:
+            yield
+        finally:
+            if worker is not None:
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
     
     # 关闭时运行
     print("🛑 Application shutting down...")
@@ -181,6 +189,14 @@ async def check_repo_session(request: Request):
         available_languages = store.get_available_languages()
         global_context = context.get("global_context", {})
         has_index = bool(global_context.get("file_tree"))
+        commit = (context.get("snapshot_index") or {}).get("revision")
+        refresh = getattr(request.app.state, "repo_refresh", None)
+        notification = None
+        if refresh:
+            from app.utils.github_client import parse_repo_url
+            parsed = parse_repo_url(context["repo_url"])
+            if parsed:
+                notification = await asyncio.to_thread(refresh.store.status, "/".join(parsed).lower())
         
         return JSONResponse({
             "exists": True,
@@ -190,7 +206,9 @@ async def check_repo_session(request: Request):
             "has_index": has_index,
             "available_languages": available_languages,
             "requested_language": language,
-            "commit": (context.get("snapshot_index") or {}).get("revision"),
+            "commit": commit,
+            "snapshot_published_at": context.get("snapshot_published_at"),
+            "snapshot_refresh": notification,
         })
     else:
         return JSONResponse({
@@ -199,6 +217,27 @@ async def check_repo_session(request: Request):
             "has_index": False,
             "available_languages": [],
         })
+
+
+@app.post("/api/github/webhook")
+async def github_webhook(request: Request):
+    service = getattr(request.app.state, "repo_refresh", None)
+    if service is None:
+        return JSONResponse({"error": "Webhook disabled"}, status_code=404)
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > MAX_BODY_BYTES:
+            return JSONResponse({"error": "Webhook payload too large"}, status_code=413)
+        raw.extend(chunk)
+    try:
+        queued = await service.accept(raw=bytes(raw), signature=request.headers.get("X-Hub-Signature-256", ""),
+                                      event=request.headers.get("X-GitHub-Event", ""),
+                                      delivery_id=request.headers.get("X-GitHub-Delivery", ""))
+    except PermissionError:
+        return JSONResponse({"error": "Invalid webhook signature"}, status_code=401)
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "Invalid webhook payload"}, status_code=400)
+    return JSONResponse({"queued": queued}, status_code=202 if queued else 200)
 
 
 # === 可复现评分 & 论文-代码对齐 (Owner: C, 路由编排: A) ===

@@ -455,6 +455,14 @@ class QdrantVectorStore(BaseVectorStore):
         except Exception as e:
             logger.error(f"删除集合失败: {e}")
             return False
+
+    async def delete_documents(self, document_ids: list[str]) -> None:
+        if not document_ids:
+            return
+        client = await self._get_client()
+        for offset in range(0, len(document_ids), 256):
+            points = [self._generate_point_id(doc_id) for doc_id in document_ids[offset:offset+256]]
+            await client.delete(self.collection_name, models.PointIdsList(points=points), wait=True)
     
     async def get_stats(self) -> CollectionStats:
         """获取集合统计"""
