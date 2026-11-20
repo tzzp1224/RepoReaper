@@ -10,6 +10,7 @@ Part C 专属 conftest —— 仅在 tests/part_c/ 作用域内生效。
 import os
 import sys
 import types
+from importlib import import_module
 
 # ---- 1. 环境变量 ----
 os.environ.setdefault("DEEPSEEK_API_KEY", "test-mock-key-not-real")
@@ -17,7 +18,11 @@ os.environ.setdefault("LLM_PROVIDER", "deepseek")
 
 
 def _ensure_stub(name, attrs=None):
-    """确保 sys.modules 里有一个 stub module，并设置指定属性。"""
+    """Use installed dependencies and stub only unavailable packages."""
+    try:
+        return import_module(name)
+    except ModuleNotFoundError:
+        pass
     if name not in sys.modules:
         mod = types.ModuleType(name)
         sys.modules[name] = mod

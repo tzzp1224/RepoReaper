@@ -79,7 +79,7 @@ class EmbeddingService:
             "retried_requests": 0
         }
     
-    def _preprocess_text(self, text: str) -> str:
+    def embedding_input(self, text: str) -> str:
         """预处理文本: 移除换行、截断长度"""
         text = text.replace("\n", " ").strip()
         if len(text) > self.config.max_text_length:
@@ -139,7 +139,7 @@ class EmbeddingService:
             embedding 向量，失败返回空列表
         """
         try:
-            processed = self._preprocess_text(text)
+            processed = self.embedding_input(text)
             if not processed:
                 return []
             
@@ -170,7 +170,7 @@ class EmbeddingService:
             return []
         
         # 预处理所有文本
-        processed_texts = [self._preprocess_text(t) for t in texts]
+        processed_texts = [self.embedding_input(t) for t in texts]
         self._stats["total_texts"] += len(texts)
         
         # 分批
@@ -198,14 +198,19 @@ class EmbeddingService:
         
         # 按批次索引排序并合并结果
         embeddings = []
-        for result in sorted(results, key=lambda x: x[0] if isinstance(x, tuple) else float('inf')):
+        # gather preserves task order, including exceptions. Sorting exceptions
+        # last silently attaches successful embeddings to the wrong documents.
+        for batch_index, result in enumerate(results):
             if isinstance(result, tuple):
                 batch_idx, batch_embeddings = result
-                embeddings.extend(batch_embeddings)
+                if batch_idx != batch_index or len(batch_embeddings) != len(batches[batch_index]):
+                    embeddings.extend([[] for _ in batches[batch_index]])
+                else:
+                    embeddings.extend(batch_embeddings)
             else:
                 # 异常情况: 填充空向量
                 # 找出这个批次有多少文本
-                failed_batch_size = batch_size  # 保守估计
+                failed_batch_size = len(batches[batch_index])
                 embeddings.extend([[] for _ in range(failed_batch_size)])
                 logger.warning(f"批次失败，填充 {failed_batch_size} 个空向量")
         

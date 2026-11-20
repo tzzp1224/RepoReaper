@@ -25,7 +25,8 @@ from app.schemas.repro import (
     PaperAlignResult,
 )
 from app.services.chunking_service import ChunkingConfig, UniversalChunker
-from app.services.github_service import get_file_content
+from app.services.github_service import get_file_content, get_github_service
+from app.services.repository_evidence import RepositoryEvidence, build_evidence, select_skill
 from app.services.vector_service import store_manager
 from app.utils.llm_client import get_client
 from app.utils.session import generate_repo_session_id
@@ -87,6 +88,7 @@ def _build_evidence_spans(evidence_snippets: List[Dict[str, Any]], top_k: int) -
                 "snippet": content[:500],
                 "score": round(float(item.get("score", 0.0) or 0.0), 6),
                 "source_query": None,
+                **({"commit": metadata["commit"], "blob": metadata["blob"]} if metadata.get("commit") else {}),
             }
         )
     return spans
@@ -578,6 +580,13 @@ async def _compute_paper_alignment_internal(
     if not context or not context.get("repo_url"):
         raise ValueError(f"Session {sid} has no analyzed context. Run /analyze first.")
 
+    manifest = context.get("snapshot_index")
+    index = tools = None
+    if manifest:
+        source = await get_github_service().open_snapshot(context["repo_url"], manifest["revision"])
+        tools = RepositoryEvidence(source)
+        index = store.snapshot_index(manifest)
+
     await _emit(event_cb, {
         "type": "stage",
         "stage": "init",
@@ -624,7 +633,16 @@ async def _compute_paper_alignment_internal(
             "message": f"Processing claim {idx}/{len(claims)}",
         })
 
-        snippets, debug_info = await _retrieve_claim_evidence(store, claim, top_k=top_k)
+        if index and tools:
+            skill = select_skill(claim)
+            paths, hints = await asyncio.gather(tools.find_paths(claim, skill, []), index.search(claim, top_k))
+            candidates = list(dict.fromkeys([*paths[:2], *(hit["file"] for hit in hints)]))[:4]
+            reads = await tools.read_batch(candidates, claim, hints)
+            _, snippets = build_evidence(reads, max_bytes=4000)
+            debug_info = {"queries": [claim], "top_files": candidates, "commit": manifest["revision"],
+                          "read_statuses": {result.path: result.status for result in reads}}
+        else:
+            snippets, debug_info = await _retrieve_claim_evidence(store, claim, top_k=top_k)
         await _emit(event_cb, {
             "type": "retrieval",
             "index": idx,
@@ -639,7 +657,7 @@ async def _compute_paper_alignment_internal(
         result = await _judge_claim(claim, snippets, top_k=top_k, debug_info=debug_info)
 
         # 轻量 JIT：缺证据时尝试单轮补召
-        if isinstance(result, MissingClaim) and result.status in {"missing", "insufficient_evidence"}:
+        if not manifest and isinstance(result, MissingClaim) and result.status in {"missing", "insufficient_evidence"}:
             excluded_paths: Set[str] = set(store.indexed_files)
             excluded_paths.update([f for f in debug_info.get("top_files", []) if f])
             jit_candidates = _select_jit_candidates(file_tree, claim, excluded_paths, limit=3)

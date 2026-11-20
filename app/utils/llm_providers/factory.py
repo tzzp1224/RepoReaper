@@ -7,6 +7,7 @@ LLM 工厂模块
 
 import os
 from typing import Optional
+from app.core.config import DEEPSEEK_DEFAULT_MODEL
 
 from .base import BaseLLMProvider, LLMConfig, LLMProviderType
 from .openai_provider import OpenAIProvider
@@ -34,7 +35,7 @@ class LLMFactory:
     # 默认模型名称映射
     _default_models = {
         LLMProviderType.OPENAI: "gpt-4o-mini",
-        LLMProviderType.DEEPSEEK: "deepseek-chat",
+        LLMProviderType.DEEPSEEK: DEEPSEEK_DEFAULT_MODEL,
         LLMProviderType.ANTHROPIC: "claude-3-5-sonnet-20241022",
         LLMProviderType.GEMINI: "gemini-1.5-flash",
     }

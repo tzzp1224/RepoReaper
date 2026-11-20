@@ -1,8 +1,6 @@
 # Docker Compose 配置 - 生产环境部署 (优化版: 2核2G服务器)
 # 包含: FastAPI 应用 + Qdrant Server
 
-version: '3.8'
-
 services:
   # ============================================================
   # Qdrant 向量数据库 (限制内存 512MB)
@@ -42,6 +40,8 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       # Qdrant Server 模式
       - QDRANT_MODE=server

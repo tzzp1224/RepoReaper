@@ -1,0 +1,16 @@
+.git
+.env
+.venv
+venv
+**/__pycache__
+.pytest_cache
+.DS_Store
+data
+logs
+output
+tmp
+evaluation/audit_runs
+evaluation/benchmark_data
+evaluation/benchmark_repos
+evaluation/benchmark_runs
+frontend-vue/node_modules

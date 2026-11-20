@@ -12,8 +12,6 @@
         <div class="brand-subtitle">GitHub repository analysis workspace</div>
       </div>
     </div>
-
-    <span class="course-badge">NUS CS5260 Project (Spring 2026)</span>
   </header>
 </template>
 
@@ -89,17 +87,6 @@ defineProps({
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
-}
-
-.course-badge {
-  padding: 5px 12px;
-  border: 1px solid #c7d2fe;
-  background: #eef2ff;
-  color: #4338ca;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
 }
 
 </style>

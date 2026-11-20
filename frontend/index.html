@@ -1200,7 +1200,7 @@
                 break;
             case BTN_STATE.REANALYZE:
                 // 强制重新分析
-                if (confirm(`This will re-analyze the repository from scratch.\n\nContinue?`)) {
+                if (confirm('Check the repository for changes and refresh the report?')) {
                     // 清空该语言的缓存
                     delete cachedReports[lang];
                     startAnalysis(false);
@@ -1241,7 +1241,7 @@
         reportDiv.innerHTML = `<div style='color:#94a3b8; text-align:center; margin-top:40px'>⏳ ${actionText} (${lang.toUpperCase()})...</div>`;
         toggleChat(false);
         
-        const logAction = regenerateOnly ? '📝 Generating report (reusing index)' : '🚀 Starting full analysis';
+        const logAction = regenerateOnly ? '📝 Generating report (reusing index)' : '🚀 Checking repository snapshot';
         document.getElementById('logs').innerHTML = `<div>[System] ${logAction} (${lang.toUpperCase()})...</div>`;
         
         // 开始 SSE 流

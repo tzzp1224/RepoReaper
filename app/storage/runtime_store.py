@@ -95,6 +95,19 @@ class RuntimeTraceStore:
                     CREATE INDEX IF NOT EXISTS idx_runs_trace_id ON runs(trace_id);
                     CREATE INDEX IF NOT EXISTS idx_steps_run_id_created_at ON steps(run_id, created_at);
                     CREATE INDEX IF NOT EXISTS idx_tool_calls_run_id_created_at ON tool_calls(run_id, created_at);
+
+                    CREATE TABLE IF NOT EXISTS conversation_turns (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        run_id TEXT NOT NULL UNIQUE,
+                        conversation_id TEXT NOT NULL,
+                        repo TEXT NOT NULL,
+                        revision TEXT NOT NULL,
+                        question TEXT NOT NULL,
+                        answer TEXT NOT NULL
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_conversation_history
+                    ON conversation_turns(conversation_id, repo, revision, id);
                     """
                 )
                 conn.commit()
@@ -304,6 +317,26 @@ class RuntimeTraceStore:
                 conn.commit()
 
     # ===== 查询接口 (用于调试/测试) =====
+
+    def recent_turns(self, conversation_id: str, repo: str, revision: str) -> list[tuple[str, str]]:
+        self._ensure_schema()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT question, answer FROM conversation_turns WHERE conversation_id = ? "
+                "AND repo = ? AND revision = ? ORDER BY id DESC LIMIT 3",
+                (conversation_id, repo, revision),
+            ).fetchall()
+        return [(row["question"], row["answer"]) for row in reversed(rows)]
+
+    def save_conversation_turn(self, run_id: str, conversation_id: str, repo: str, revision: str,
+                               question: str, answer: str) -> None:
+        self._ensure_schema()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO conversation_turns (run_id, conversation_id, repo, revision, question, answer) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(run_id) DO NOTHING",
+                (run_id, conversation_id, repo, revision, question[:4000], answer[:8000]),
+            )
 
     def get_run_by_trace_id(self, trace_id: str) -> Optional[Dict[str, Any]]:
         self._ensure_schema()

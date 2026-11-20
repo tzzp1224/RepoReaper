@@ -50,15 +50,15 @@ RepoReaper 是一个面向 GitHub 仓库的证据化智能分析 Agent，服务�
 | 场景 | 结果 |
 | :-- | :-- |
 | 新仓库接手与快速入门 | 分析一次后，持续复用中英报告与索引上下文。 |
-| 深入实现细节排查 | Chat 先改写问题并检索关键片段，证据不足时触发 JIT 补文件。 |
+| 深入实现细节排查 | Chat 按固定 commit 查找原始源码，引用链接直达文件行区间。 |
 | 项目节奏与维护状态审查 | Issues Notebook 与 Commit Roadmap 并行呈现维护压力和交付方向。 |
 | 可复现性交接评估 | Reproducibility Score 给出结构化风险、证据引用和本地化摘要。 |
 | 论文 claim 与代码实现核验 | Paper Align 对 claim 逐条比对代码证据，并流式暴露 partial/missing。 |
 | 规划下一步问题 | Suggested Questions 给出架构、实现、复现三类锚定追问。 |
 
 ## RepoReaper 如何工作
-- **会话化状态模型**：每个仓库映射到稳定会话，分析上下文、报告和 artifacts 可跨访问复用。
-- **分层检索链路**：向量检索与 BM25 通过 RRF 融合，再结合查询改写与 JIT 补文件，提升复杂问题的证据召回。
+- **按 commit 增量更新**。刷新时复用未变切片和向量，新索引与报告一起发布。同一 commit 直接复用已有报告。
+- **按需读取源码证据**。Chat 结合路径、符号和混合召回，读取有长度上限的原始片段，再流式输出一次最终答案。对话记忆按浏览器会话、仓库和 commit 隔离。
 - **流式执行为默认**：分析、洞察、问答、对齐按阶段回传，用户可边看边判断。
 - **显式缓存层次**：issues/roadmap/questions 等产物可缓存复用；可复现评分采用 `core` 与 localized 分层缓存。
 - **并发写入可控**：仓库级锁支持 `memory` / `file` / `redis` 后端，避免同会话写冲突。
@@ -75,7 +75,11 @@ RepoReaper 是一个面向 GitHub 仓库的证据化智能分析 Agent，服务�
 - **先拆 claim**：将论文文本拆解为可核验的技术 claims。
 - **逐 claim 证据检索**：每个 claim 扩展为检索友好查询，并与仓库片段匹配。
 - **判定结果有边界**：明确区分 `aligned`、`partial`、`missing`、`insufficient_evidence`，并给出证据摘录。
-- **困难样本可回退**：证据不足时触发候选文件 JIT 拉取与再判定，而不是直接终止。
+- **判定前补证据**。对已固定 commit 的索引，在判定前读取候选文件的原始片段，附带 commit 和行区间。
+
+### 可选的 Jev 路由
+
+设置 `TYPESAFE_API_KEY` 和 `JEV_MODE=shadow` 可同时记录 Jev 和本地规则选择的读取批次。`JEV_MODE=active` 允许达到阈值的选择调整读取顺序。默认 `off`。Jev 接收问题和候选路径元数据，文件访问与读取由 RepoReaper 执行。 [TypeSafe Choice API](https://docs.typesafe.ai/primitives/choice)
 - **诊断过程可流式观察**：claim 进度、检索轨迹、回退动作与最终置信度都可被检查。
 
 ## 快速开始

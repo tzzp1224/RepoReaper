@@ -8,10 +8,14 @@ GitHub 服务层
 - 保持向后兼容的函数签名
 """
 
+import asyncio
 import logging
 import re
 from typing import List, Optional, Dict
 from urllib.parse import urlparse
+from app.services.repository_source import (
+    BlobEntry, GitSnapshotSource, RepositorySource, bound_source, decode_text, discovery_paths,
+)
 
 from app.storage.repo_mirror_store import RepoMirrorStore, RepoMirrorUnavailable
 from app.utils.github_client import (
@@ -28,6 +32,28 @@ from app.utils.github_client import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class GitHubSnapshotSource:
+    def __init__(self, client: GitHubClient, repo: GitHubRepo, revision: str, entries: dict[str, BlobEntry]):
+        self._client = client
+        self._repo = repo
+        self.repo = repo.full_name
+        self.revision = revision
+        self._entries = entries
+
+    async def manifest(self) -> dict[str, BlobEntry]:
+        return self._entries
+
+    async def list_files(self) -> list[str]:
+        return discovery_paths(self._entries)
+
+    async def read_file(self, path: str) -> str | None:
+        entry = self._entries.get(path)
+        if entry is None or entry.size > FileFilter.max_file_size:
+            return None
+        data = await self._client.get_blob(self._repo, entry.sha)
+        return decode_text(data) if len(data) <= FileFilter.max_file_size else None
 
 
 # ============================================================
@@ -84,6 +110,41 @@ class GitHubService:
         
         owner, name = parsed
         return await self.client.get_repo(owner, name)
+
+    async def open_snapshot(self, repo_url: str, revision: str | None = None) -> RepositorySource:
+        source = bound_source(repo_url)
+        if source is not None:
+            if revision and revision != source.revision:
+                raise ValueError("Snapshot revision mismatch")
+            return source
+        if revision is not None and not re.fullmatch(r"[0-9a-f]{40}", revision):
+            raise ValueError("Invalid commit SHA")
+
+        parsed = parse_repo_url(repo_url)
+        if not parsed or not all(re.fullmatch(r"[A-Za-z0-9_.-]+", part) and part not in {".", ".."} for part in parsed):
+            raise ValueError("Invalid GitHub repository URL")
+        repo = GitHubRepo(*parsed) if revision else await self._get_repo_from_url(repo_url)
+        try:
+            if revision is None:
+                snapshot = await self._mirror_store.resolve_snapshot(repo)
+                root, revision = snapshot.mirror_git_dir, snapshot.commit_sha
+            else:
+                root = self._mirror_store.local_git_dir(repo)
+            source = await asyncio.to_thread(GitSnapshotSource, root, repo.full_name, revision)
+            await source.manifest()
+            return source
+        except Exception as exc:
+            logger.info("Git snapshot unavailable in mirror for %s: %s", repo.full_name, type(exc).__name__)
+
+        resolved, tree = await self.client.get_revision_tree(repo, revision or repo.default_branch)
+        if revision and resolved != revision:
+            raise ValueError("GitHub returned a different revision")
+        entries = {
+            item["path"]: BlobEntry(item["sha"], item.get("size", 0))
+            for item in await self.client.get_tree_entries(repo, tree)
+            if item["type"] == "blob" and item["mode"] in {"100644", "100755"}
+        }
+        return GitHubSnapshotSource(self.client, repo, resolved, entries)
     
     async def get_repo_structure(
         self,
@@ -100,6 +161,9 @@ class GitHubService:
         Returns:
             文件路径列表
         """
+        source = bound_source(repo_url)
+        if source is not None:
+            return await source.list_files()
         repo = await self._get_repo_from_url(repo_url)
         if self._mirror_store is not None:
             try:
@@ -129,6 +193,9 @@ class GitHubService:
         Returns:
             文件内容，失败返回 None
         """
+        source = bound_source(repo_url)
+        if source is not None:
+            return await source.read_file(file_path)
         repo = await self._get_repo_from_url(repo_url)
         if self._mirror_store is not None:
             try:
@@ -159,6 +226,9 @@ class GitHubService:
         Returns:
             {path: content} 字典
         """
+        source = bound_source(repo_url)
+        if source is not None:
+            return {path: await source.read_file(path) for path in file_paths}
         repo = await self._get_repo_from_url(repo_url)
         return await self.client.get_files_content(repo, file_paths, show_progress=True)
     

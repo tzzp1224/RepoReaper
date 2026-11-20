@@ -1,0 +1,20 @@
+{
+  "generation": {
+    "input_cny_per_million": null,
+    "output_cny_per_million": null,
+    "source": "",
+    "verified_at": ""
+  },
+  "embedding": {
+    "input_cny_per_million": null,
+    "output_cny_per_million": 0,
+    "source": "",
+    "verified_at": ""
+  },
+  "judge": {
+    "input_cny_per_million": null,
+    "output_cny_per_million": null,
+    "source": "",
+    "verified_at": ""
+  }
+}

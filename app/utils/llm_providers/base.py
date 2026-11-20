@@ -190,6 +190,7 @@ class _CompletionsNamespace:
         last_error = None
         
         for attempt in range(1, max_retries + 1):
+            emitted = False
             try:
                 logger.debug(f"🔄 LLM 流式请求 (尝试 {attempt}/{max_retries}): model={model}")
                 
@@ -205,6 +206,8 @@ class _CompletionsNamespace:
                 
                 # 迭代流并 yield
                 async for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                        emitted = True
                     yield chunk
                 
                 # 成功完成，退出重试循环
@@ -212,7 +215,9 @@ class _CompletionsNamespace:
                 
             except Exception as e:
                 last_error = e
-                if is_retryable_error(e) and attempt < max_retries:
+                # Once text has reached callers it cannot be retracted. Replaying
+                # the stream would concatenate two answers/tool requests.
+                if not emitted and is_retryable_error(e) and attempt < max_retries:
                     wait_time = min(2 ** attempt, 30)  # 指数退避
                     logger.warning(
                         f"🔄 LLM 流式请求失败 (尝试 {attempt}/{max_retries}): "

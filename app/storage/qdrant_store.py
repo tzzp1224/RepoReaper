@@ -309,6 +309,7 @@ class QdrantVectorStore(BaseVectorStore):
         embeddings: List[List[float]]
     ) -> int:
         """批量添加文档"""
+        self.last_added_ids = []
         if not documents or not embeddings:
             return 0
         
@@ -356,6 +357,7 @@ class QdrantVectorStore(BaseVectorStore):
                     wait=True,
                 )
                 total_added += len(batch)
+                self.last_added_ids.extend(point.payload["doc_id"] for point in batch)
             except Exception as e:
                 logger.error(f"批次 {i // batch_size + 1} 写入失败: {e}")
         
@@ -373,27 +375,23 @@ class QdrantVectorStore(BaseVectorStore):
         self,
         query_embedding: List[float],
         top_k: int = 10,
-        filter_conditions: Optional[Dict[str, Any]] = None
+        filter_conditions: Optional[Dict[str, Any]] = None,
+        *,
+        document_ids: Optional[List[str]] = None,
     ) -> List[SearchResult]:
         """向量相似度搜索"""
-        if not query_embedding:
+        if not query_embedding or document_ids == []:
             return []
         
         await self.initialize()
         client = await self._get_client()
         
         # 构建过滤器
-        query_filter = None
-        if filter_conditions:
-            must_conditions = []
-            for field, value in filter_conditions.items():
-                must_conditions.append(
-                    FieldCondition(
-                        key=field,
-                        match=MatchValue(value=value),
-                    )
-                )
-            query_filter = Filter(must=must_conditions)
+        conditions = [FieldCondition(key=field, match=MatchValue(value=value))
+                      for field, value in (filter_conditions or {}).items()]
+        if document_ids is not None:
+            conditions.append(models.HasIdCondition(has_id=[self._generate_point_id(i) for i in document_ids]))
+        query_filter = Filter(must=conditions) if conditions else None
         
         try:
             # 使用 query_points (qdrant-client >= 1.7.0)
@@ -425,6 +423,26 @@ class QdrantVectorStore(BaseVectorStore):
         except Exception as e:
             logger.error(f"搜索失败: {e}")
             return []
+
+    async def retrieve_documents(self, document_ids: list[str], *, with_vectors: bool = False):
+        if not document_ids:
+            return {}
+        await self.initialize()
+        client = await self._get_client()
+        found = {}
+        for start in range(0, len(document_ids), 256):
+            batch = document_ids[start:start + 256]
+            records = await client.retrieve(
+                collection_name=self.collection_name,
+                ids=[self._generate_point_id(i) for i in batch],
+                with_payload=True,
+                with_vectors=with_vectors,
+            )
+            for record in records:
+                payload = record.payload or {}
+                doc = Document(payload["doc_id"], payload[self.FIELD_CONTENT], payload[self.FIELD_METADATA])
+                found[doc.id] = (doc, record.vector if with_vectors else None)
+        return found
     
     async def delete_collection(self) -> bool:
         """删除集合"""

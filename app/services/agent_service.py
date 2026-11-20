@@ -11,11 +11,13 @@ from datetime import datetime
 from app.core.config import settings, agent_config
 from app.utils.llm_client import client
 from app.utils.repo_lock import RepoLock
-from app.services.github_service import get_repo_structure, get_file_content
+from app.services.github_service import get_repo_structure, get_file_content, get_github_service
+from app.services.repo_index import SnapshotIndex, incremental_paths, index_namespace
+from app.services.repository_source import bound_source
 from app.services.vector_service import store_manager
 from app.services.chunking_service import UniversalChunker, ChunkingConfig
 from app.services.tracing_service import tracing_service
-from app.utils.session import generate_repo_lock_key
+from app.utils.session import generate_repo_lock_key, normalize_repo_url
 
 # === Helper: 鲁棒的 JSON 提取 ===
 def extract_json_from_text(text):
@@ -117,7 +119,7 @@ def _extract_symbols_regex(content, ext):
 
     return symbols
 
-async def generate_repo_map(repo_url, file_list, limit=agent_config.initial_map_limit) -> Tuple[str, Set[str]]:
+async def generate_repo_map(repo_url, file_list, limit=agent_config.initial_map_limit, *, symbol_loader=None) -> Tuple[str, Set[str]]:
     """
     生成增强版仓库地图 (多语言版)
     Returns:
@@ -139,6 +141,9 @@ async def generate_repo_map(repo_url, file_list, limit=agent_config.initial_map_
     mapped_files_set = set(targets) # === 记录已映射的文件 ===
     
     async def process_file(path):
+        if symbol_loader is not None:
+            symbols = await symbol_loader(path)
+            return "\n".join([path, *symbols])
         content = await get_file_content(repo_url, path)
         if not content: return f"{path} (Read Failed)"
         
@@ -279,6 +284,61 @@ async def _agent_stream_inner(
     """
     try:
         vector_db = store_manager.get_store(session_id)
+        state = vector_db.load_context() or {}
+        previous = state.get("snapshot_index")
+        matches_repo = normalize_repo_url(state.get("repo_url") or "") == normalize_repo_url(repo_url)
+        if regenerate_only and state and not matches_repo:
+            raise ValueError("The saved index belongs to a different repository")
+
+        source = None
+        index = None
+        if bound_source(repo_url) is None and (previous or not regenerate_only):
+            revision = previous["revision"] if regenerate_only else None
+            source = await get_github_service().open_snapshot(repo_url, revision)
+            entries = await source.manifest()
+            manifest = {
+                "namespace": index_namespace(source.repo), "revision": source.revision,
+                "tree": {path: entry.sha for path, entry in entries.items()}, "files": {}, "map": {},
+            }
+            reusable = previous if previous and matches_repo and previous["namespace"] == manifest["namespace"] else None
+            if regenerate_only or reusable and reusable["revision"] == source.revision:
+                report = (state.get("reports") or {}).get(language)
+                if report and not regenerate_only:
+                    for offset in range(0, len(report), 2000):
+                        yield json.dumps({"step": "report_chunk", "chunk": report[offset:offset + 2000]})
+                    yield json.dumps({"step": "finish", "message": "Repository is already up to date.",
+                                      "commit": source.revision})
+                    return
+                regenerate_only = True
+                manifest = previous
+            index = SnapshotIndex(vector_db, manifest)
+            if not regenerate_only:
+                await index.backend.initialize()
+
+        async def read_file(path):
+            return await (source.read_file(path) if source else get_file_content(repo_url, path))
+
+        async def map_symbols(path):
+            blob = entries[path].sha
+            old = reusable.get("map", {}).get(path) if reusable else None
+            if old and old["blob"] == blob:
+                symbols = old["symbols"]
+            else:
+                content = await read_file(path)
+                symbols = await asyncio.to_thread(_extract_symbols, content or "", path)
+            manifest["map"][path] = {"blob": blob, "symbols": symbols}
+            return symbols
+
+        async def stage_file(path, old=None, content=None):
+            blob = entries[path].sha
+            if old and old["blob"] == blob and old["path"] == path:
+                return old
+            if content is None:
+                content = await read_file(path)
+            if content is None:
+                return None
+            ids = await index.stage_file(path, content, old)
+            return {"blob": blob, "path": path, "docs": ids, "preview": "\n".join(content.splitlines()[:50])[:4000]}
         
         # 调试日志：确认 session 隔离
         print(f"🔍 [DEBUG] session_id: {session_id}, collection: {vector_db.collection_name}, context_file: {vector_db._context_file}")
@@ -301,21 +361,34 @@ async def _agent_stream_inner(
             visited_files = set()  # regenerate 模式不需要这个，但报告生成需要引用
             
             # 验证上下文与请求的仓库匹配
-            stored_repo_url = context.get("repo_url", "")
-            if stored_repo_url and repo_url not in stored_repo_url and stored_repo_url not in repo_url:
-                print(f"⚠️ [WARNING] repo_url mismatch! Request: {repo_url}, Stored: {stored_repo_url}")
-            
             yield json.dumps({"step": "generating", "message": f"📝 Generating report in {'Chinese' if language == 'zh' else 'English'}..."})
+        elif source and reusable:
+            yield json.dumps({"step": "init", "message": "Refreshing the repository index from changed files."})
+            file_list = await source.list_files()
+            file_tree_str, _ = await generate_repo_map(repo_url, file_list, symbol_loader=map_symbols)
+            plan = incremental_paths(reusable, entries, file_list)
+            for path, old_path in plan.items():
+                entry = await stage_file(path, reusable["files"].get(old_path))
+                if entry is not None:
+                    manifest["files"][path] = entry
+            visited_files = set(manifest["files"])
+            context_summary = "".join(f"\n--- File: {path} ---\n{entry['preview']}\n"
+                                      for path, entry in manifest["files"].items())[:agent_config.max_context_length]
+            changed = sum(reusable["tree"].get(path) != blob for path, blob in manifest["tree"].items())
+            removed = len(reusable["tree"].keys() - manifest["tree"].keys())
+            yield json.dumps({"step": "indexing", "message": f"Updated {changed} paths and removed {removed} paths.",
+                              "commit": source.revision})
         else:
             # === 正常分析模式 ===
             yield json.dumps({"step": "init", "message": f"🚀 [Session: {short_id}] Connecting to GitHub..."})
             await asyncio.sleep(0.5)
             
-            await vector_db.reset()  # 使用异步方法
+            if source is None:
+                await vector_db.reset()
             
             chunker = UniversalChunker(config=ChunkingConfig(min_chunk_size=50))
 
-            file_list = await get_repo_structure(repo_url)
+            file_list = await (source.list_files() if source else get_repo_structure(repo_url))
             if not file_list:
                 raise Exception("Repository is empty or unreadable.")
 
@@ -323,7 +396,10 @@ async def _agent_stream_inner(
             
             # === 接收 mapped_files 用于后续查重 + 计时 ===
             map_start = time.time()
-            file_tree_str, mapped_files = await generate_repo_map(repo_url, file_list, limit=agent_config.initial_map_limit)
+            file_tree_str, mapped_files = await generate_repo_map(
+                repo_url, file_list, limit=agent_config.initial_map_limit,
+                symbol_loader=map_symbols if source else None,
+            )
             map_latency_ms = (time.time() - map_start) * 1000
             tracing_service.add_event("repo_map_generated", {"latency_ms": map_latency_ms, "files_mapped": len(mapped_files)})
             
@@ -391,7 +467,8 @@ async def _agent_stream_inner(
                 )
                 target_files = extract_json_from_text(raw_content)
 
-                valid_files = [f for f in target_files if f in file_list and f not in visited_files]
+                valid_files = list(dict.fromkeys(f for f in target_files if isinstance(f, str)
+                                                and f in file_list and f not in visited_files))[:agent_config.files_per_round]
 
                 if round_idx == 0 and readme_file and readme_file not in visited_files and readme_file not in valid_files:
                     valid_files.insert(0, readme_file)
@@ -409,7 +486,7 @@ async def _agent_stream_inner(
                         
                         # 🔧 异步 GitHub API (已优化为非阻塞)
                         tool_start = time.time()
-                        content = await get_file_content(repo_url, file_path)
+                        content = await read_file(file_path)
                         tracing_service.record_tool_call(
                             tool_name="github.get_file_content",
                             parameters={"repo_url": repo_url, "file_path": file_path},
@@ -418,10 +495,10 @@ async def _agent_stream_inner(
                                 "content_chars": len(content or ""),
                             },
                             latency_ms=(time.time() - tool_start) * 1000,
-                            success=bool(content),
-                            error=None if content else "empty_content",
+                            success=content is not None,
+                            error="unreadable" if content is None else None,
                         )
-                        if not content: 
+                        if content is None:
                             tracing_service.add_event("file_read_failed", {"file": file_path})
                             return None
 
@@ -438,6 +515,9 @@ async def _agent_stream_inner(
                                 new_map_entry = f"{file_path}\n" + "\n".join(symbols)
 
                         # 3. 切片与入库
+                        if index is not None:
+                            manifest["files"][file_path] = await stage_file(file_path, content=content)
+                            return {"path": file_path, "knowledge": file_knowledge, "map_entry": new_map_entry}
                         chunks = await asyncio.to_thread(chunker.chunk_file, content, file_path)
                         if chunks:
                             documents = [c["content"] for c in chunks]
@@ -455,17 +535,19 @@ async def _agent_stream_inner(
                             if documents:
                                 try:
                                     add_start = time.time()
-                                    await vector_db.add_documents(documents, metadatas)
+                                    added = await vector_db.add_documents(documents, metadatas)
                                     tracing_service.record_tool_call(
                                         tool_name="vector.add_documents",
                                         parameters={
                                             "file_path": file_path,
                                             "documents": len(documents),
                                         },
-                                        result={"indexed_documents": len(documents)},
+                                        result={"indexed_documents": added},
                                         latency_ms=(time.time() - add_start) * 1000,
-                                        success=True,
+                                        success=added == len(documents),
                                     )
+                                    if added != len(documents):
+                                        return None
                                 except Exception as e:
                                     tracing_service.record_tool_call(
                                         tool_name="vector.add_documents",
@@ -495,6 +577,8 @@ async def _agent_stream_inner(
                             "map_entry": new_map_entry
                         }
                     except Exception as e:
+                        if index is not None:
+                            raise
                         print(f"❌ 处理文件错误 {file_path}: {e}")
                         return None
 
@@ -510,6 +594,8 @@ async def _agent_stream_inner(
                 for res in results:
                     if not res or isinstance(res, Exception): 
                         if isinstance(res, Exception):
+                            if index is not None:
+                                raise res
                             print(f"❌ Task 异常: {res}")
                         continue
                     download_count += 1
@@ -528,7 +614,8 @@ async def _agent_stream_inner(
                     "file_tree": file_tree_str,
                     "summary": context_summary[:8000]
                 }
-                await vector_db.save_context(repo_url, global_context_data)
+                if index is None:
+                    await vector_db.save_context(repo_url, global_context_data)
                 
                 yield json.dumps({"step": "indexing", "message": f"🧠 [Round {round_idx+1}] Processed {download_count} files. Knowledge graph updated."})
 
@@ -550,9 +637,12 @@ async def _agent_stream_inner(
         
         retrieved_snippets = []
         try:
-            await vector_db.initialize()
+            if index is not None:
+                index = SnapshotIndex(vector_db, manifest)
+            else:
+                await vector_db.initialize()
             for query in key_queries:
-                results = await vector_db.search_hybrid(query, top_k=2)
+                results = await (index.search(query, top_k=2) if index else vector_db.search_hybrid(query, top_k=2))
                 for r in results:
                     snippet = r.get("content", "")[:400]
                     file_path = r.get("file", "unknown")
@@ -569,10 +659,7 @@ async def _agent_stream_inner(
         
         # 获取 file_list（regenerate_only 模式下需要重新获取）
         if regenerate_only:
-            try:
-                temp_file_list = await get_repo_structure(repo_url)
-            except:
-                temp_file_list = []
+            temp_file_list = await source.list_files() if source else []
         else:
             temp_file_list = file_list if 'file_list' in dir() else []
         
@@ -580,7 +667,7 @@ async def _agent_stream_inner(
             matching = [f for f in temp_file_list if f.endswith(dep_file)]
             for f in matching[:1]:  # 只取第一个匹配
                 try:
-                    content = await get_file_content(repo_url, f)
+                    content = await read_file(f)
                     if content:
                         dependencies_info += f"\n[{f}]\n{content[:800]}\n"
                 except:
@@ -851,9 +938,18 @@ async def _agent_stream_inner(
         )
         
         # === 保存报告 (按语言存储，异步避免阻塞) ===
-        await vector_db.save_report(generated_text, language)
+        if not generated_text.strip():
+            raise RuntimeError("The report generator returned an empty response")
+        if index is not None and not regenerate_only:
+            context = {"file_tree": file_tree_str, "summary": context_summary[:8000], "commit": source.revision}
+            await vector_db.publish_snapshot(repo_url, manifest, previous, context, generated_text, language)
+        else:
+            await vector_db.save_report(generated_text, language)
 
-        yield json.dumps({"step": "finish", "message": "✅ Analysis Complete!"})
+        finished = {"step": "finish", "message": "✅ Analysis Complete!"}
+        if source:
+            finished["commit"] = source.revision
+        yield json.dumps(finished)
 
     except Exception as e:
         # === 全局异常捕获 ===

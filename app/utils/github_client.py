@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any, Set
 from contextlib import asynccontextmanager
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -308,6 +308,39 @@ class GitHubClient:
             description=data.get("description", ""),
             stars=data.get("stargazers_count", 0)
         )
+
+    async def get_revision_tree(self, repo: GitHubRepo, ref: str) -> tuple[str, str]:
+        root = f"/repos/{repo.owner}/{repo.name}"
+        data = await self._request("GET", f"{root}/commits/{quote(ref, safe='')}")
+        return data["sha"], data["commit"]["tree"]["sha"]
+
+    async def get_tree_entries(self, repo: GitHubRepo, tree_sha: str) -> List[Dict[str, Any]]:
+        root = f"/repos/{repo.owner}/{repo.name}/git/trees"
+        data = await self._request("GET", f"{root}/{tree_sha}", params={"recursive": "1"})
+        if not data.get("truncated"):
+            return data["tree"]
+
+        # Recursive responses can be partial. Walk complete individual trees instead.
+        pending = [("", tree_sha)]
+        entries = []
+        while pending:
+            prefix, sha = pending.pop()
+            tree = await self._request("GET", f"{root}/{sha}")
+            if tree.get("truncated"):
+                raise GitHubError("A GitHub tree is incomplete")
+            for entry in tree["tree"]:
+                path = prefix + entry["path"]
+                if entry["type"] == "tree":
+                    pending.append((path + "/", entry["sha"]))
+                else:
+                    entries.append({**entry, "path": path})
+        return entries
+
+    async def get_blob(self, repo: GitHubRepo, sha: str) -> bytes:
+        data = await self._request("GET", f"/repos/{repo.owner}/{repo.name}/git/blobs/{sha}")
+        if data.get("sha") != sha or data.get("encoding") != "base64":
+            raise GitHubError("Unexpected GitHub blob response")
+        return base64.b64decode(data["content"])
     
     async def get_repo_tree(
         self,

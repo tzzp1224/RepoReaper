@@ -11,7 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # 4. 安装系统级依赖
-# build-essential: ChromaDB 编译需要
+# build-essential: 编译缺少预编译 wheel 的 Python 依赖
 # curl: 健康检查
 # git: 某些 pip 包可能需要
 RUN apt-get update && apt-get install -y --no-install-recommends \

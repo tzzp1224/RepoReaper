@@ -51,7 +51,7 @@ RepoReaper is an evidence-grounded repository intelligence agent for engineers, 
 | Scenario | Outcome |
 | :-- | :-- |
 | Onboarding to a new repository | Analyze once, then reuse bilingual reports and indexed context for later deep dives. |
-| Investigating implementation details | Chat rewrites the query, retrieves relevant chunks, and uses JIT file loading when first-pass evidence is insufficient. |
+| Investigating implementation details | Chat gathers original source spans from one commit and links citations to their exact lines. |
 | Reviewing project trajectory | Issues Notebook and Commit Roadmap reveal maintenance pressure and delivery direction in parallel. |
 | Preparing a reproducibility handoff | Reproducibility Score provides structured risks, evidence references, and localized summary output. |
 | Verifying paper claims against code | Paper Align checks claims against code evidence and surfaces missing or partial support with stream diagnostics. |
@@ -68,8 +68,8 @@ RepoReaper is an evidence-grounded repository intelligence agent for engineers, 
 - **👁️ Observability & Tracing**: Built-in LLM tracing and evaluation observability to monitor token usage and prompt chains (supported via dedicated Docker Compose profiles).
 
 ## How RepoReaper Works
-- **Session-centered state model**: each repository maps to a stable session, and analysis context, reports, and artifacts are reused across visits.
-- **Layered retrieval pipeline**: vector search and BM25 are fused by RRF, then query rewrite and JIT file loading recover missing evidence for complex questions.
+- **Commit-pinned analysis**: refreshing the repository reuses unchanged chunks and their vectors. The new index and report become visible together. Refreshing an unchanged commit reuses its existing report.
+- **Evidence retrieval**: Chat combines exact paths, symbols, and hybrid search. It reads bounded original source spans on demand and streams a single answer. It stores recent turns separately for each browser session, repository, and commit.
 - **Streaming-first execution**: analysis, insights, chat, and alignment emit incremental output so users can inspect progress before full completion.
 - **Explicit cache hierarchy**: issues/roadmap/questions artifacts and split reproducibility caches (`core` + localized) reduce repeat latency while preserving refresh control.
 - **Concurrency-safe writes**: repository-level locks with `memory` / `file` / `redis` backends prevent conflicting writes on the same session.
@@ -86,7 +86,11 @@ RepoReaper is an evidence-grounded repository intelligence agent for engineers, 
 - **Claim extraction**: paper text is decomposed into verifiable technical claims.
 - **Evidence retrieval per claim**: each claim is expanded into retrieval-friendly queries and matched against repository snippets.
 - **Explicit judgment states**: outputs separate `aligned`, `partial`, `missing`, and `insufficient_evidence`, with evidence excerpts.
-- **JIT fallback for hard claims**: when evidence is weak, candidate files are fetched/indexed on demand and judged again.
+- **Source verification**: on a commit-pinned index, candidate files are read before judgment, with original line ranges and commit details in the evidence.
+
+### Optional Jev routing
+
+Set `TYPESAFE_API_KEY` and `JEV_MODE=shadow` to log Jev's preferred read batch alongside the local choice. `JEV_MODE=active` lets sufficiently confident selections reorder the candidate batches. The default is `off`. Jev receives the question and candidate path metadata, while repository access and file reads stay in RepoReaper. [TypeSafe Choice API](https://docs.typesafe.ai/primitives/choice)
 - **Streaming diagnostics**: claim progress, retrieval traces, fallback actions, and final confidence are emitted as inspectable events.
 
 ## Quick Start

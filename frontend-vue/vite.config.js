@@ -23,6 +23,14 @@ export default defineConfig({
   },
   build: {
     outDir: '../frontend-dist',
-    emptyOutDir: true
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Older static hosts may serve .mjs assets as application/octet-stream.
+        assetFileNames: assetInfo => assetInfo.name?.endsWith('.mjs')
+          ? 'assets/[name]-[hash].js'
+          : 'assets/[name]-[hash][extname]'
+      }
+    }
   }
 })

@@ -4,7 +4,7 @@
 
 支持多个 LLM 供应商，通过 LLM_PROVIDER 环境变量切换:
 - openai: OpenAI (GPT-4, GPT-4o 等)
-- deepseek: DeepSeek (deepseek-chat, deepseek-coder 等)
+- deepseek: DeepSeek (deepseek-flash 等)
 - anthropic: Anthropic (Claude 3.5, Claude 3 等)
 - gemini: Google Gemini (gemini-1.5-pro 等)
 

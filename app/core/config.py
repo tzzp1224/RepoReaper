@@ -4,7 +4,7 @@
 
 支持多 LLM 供应商配置:
 - OpenAI (GPT-4, GPT-4o 等)
-- DeepSeek (deepseek-chat 等)
+- DeepSeek (deepseek-flash 等)
 - Anthropic (Claude 系列)
 - Google Gemini (gemini-3-flash-preview 等)
 """
@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 
 # 加载 .env 文件
 load_dotenv()
+
+DEEPSEEK_DEFAULT_MODEL = "deepseek-flash"
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -266,7 +268,7 @@ class Settings:
         """获取当前供应商的默认模型名称"""
         defaults = {
             "openai": "gpt-4o-mini",
-            "deepseek": "deepseek-chat",
+            "deepseek": DEEPSEEK_DEFAULT_MODEL,
             "anthropic": "claude-3-5-sonnet-20241022",
             "gemini": "gemini-3-flash-preview",
         }

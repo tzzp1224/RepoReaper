@@ -26,7 +26,7 @@ export function useAnalysis() {
         await startAnalysis(true)
         break
       case BTN_STATE.REANALYZE:
-        if (confirm('This will re-analyze the repository from scratch.\n\nContinue?')) {
+        if (confirm('Check the repository for changes and refresh the report?')) {
           delete store.cachedReports[store.language]
           await startAnalysis(false)
         }
@@ -58,7 +58,7 @@ export function useAnalysis() {
     store.currentReport = ''
     store.resetChatMessages()
     
-    const actionText = regenerateOnly ? '📝 Generating report (reusing index)' : '🚀 Starting full analysis'
+    const actionText = regenerateOnly ? '📝 Generating report (reusing index)' : '🚀 Checking repository snapshot'
     store.clearLogs()
     store.addLog(`[System] ${actionText} (${store.language.toUpperCase()})...`)
     

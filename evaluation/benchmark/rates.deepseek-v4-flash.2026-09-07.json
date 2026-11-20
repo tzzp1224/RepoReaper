@@ -1,0 +1,26 @@
+{
+  "generation": {
+    "model": "deepseek-v4-flash",
+    "input_cny_per_million": 3.3,
+    "output_cny_per_million": 9.9,
+    "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+    "verified_at": "2026-09-07",
+    "assumption": "Peak cache-miss USD 0.44 input / 1.32 output, converted at assumed 7.5 CNY/USD for budgeting; no cache discounts. Not a live FX quote. Explicit non-thinking mode."
+  },
+  "embedding": {
+    "model": "BAAI/bge-m3",
+    "input_cny_per_million": 0,
+    "output_cny_per_million": 0,
+    "source": "https://siliconflow.cn/pricing",
+    "verified_at": "2026-09-07",
+    "assumption": "Published free BAAI/bge-m3 tier; not Pro/BAAI/bge-m3."
+  },
+  "judge": {
+    "model": "gpt-5-2025-08-07",
+    "input_cny_per_million": 9.375,
+    "output_cny_per_million": 75,
+    "source": "https://developers.openai.com/api/docs/models/gpt-5",
+    "verified_at": "2026-09-07",
+    "assumption": "USD 1.25 input / 10 output at assumed 7.5 CNY/USD for budgeting. No cache discounts. Includes reasoning output tokens."
+  }
+}

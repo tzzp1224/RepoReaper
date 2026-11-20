@@ -4,6 +4,8 @@ import io
 import os
 import asyncio
 import json
+import re
+from secrets import token_urlsafe
 from contextlib import asynccontextmanager
 
 # 强制 stdout 使用 utf-8，防止 Windows 控制台乱码
@@ -188,6 +190,7 @@ async def check_repo_session(request: Request):
             "has_index": has_index,
             "available_languages": available_languages,
             "requested_language": language,
+            "commit": (context.get("snapshot_index") or {}).get("revision"),
         })
     else:
         return JSONResponse({
@@ -574,10 +577,16 @@ async def chat(request: Request):
     session_id = data.get("session_id")
     repo_url = data.get("repo_url", "")
     
-    if not user_query:
+    if not isinstance(user_query, str) or not user_query.strip():
         return {"answer": "Please enter your question"}
-    if not session_id:
+    if not isinstance(session_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", session_id):
         return {"answer": "Session lost"}
+    if not isinstance(repo_url, str):
+        return {"answer": "Invalid repository URL"}
+    conversation_id = request.cookies.get("reporeaper_conversation", "")
+    new_conversation = not re.fullmatch(r"[-_a-zA-Z0-9]{32}", conversation_id)
+    if new_conversation:
+        conversation_id = token_urlsafe(24)
 
     trace_id = tracing_service.start_trace(
         trace_name="chat_session",
@@ -590,39 +599,38 @@ async def chat(request: Request):
 
     # 标记流是否完成
     stream_completed = False
+    run_status = "failed"
     
     async def chat_stream_with_eval():
         """包装 process_chat_stream，流结束后触发评估"""
-        nonlocal stream_completed
+        nonlocal stream_completed, run_status
         tracing_service.record_step(
             step_name="chat_stream_start",
             status="info",
             message="chat streaming started",
             payload={"session_id": session_id},
         )
-        # 清除旧的评估数据
-        clear_eval_data(session_id)
-
         try:
             # 执行聊天流
-            async for chunk in process_chat_stream(user_query, session_id):
+            async for chunk in process_chat_stream(user_query, session_id, run_id=trace_id,
+                                                   repo_url=repo_url, conversation_id=conversation_id):
                 yield chunk
 
-            # 流完成后标记
-            stream_completed = True
+            eval_data = get_eval_data(trace_id)
+            stream_completed = bool(eval_data and eval_data.status == "completed")
+            if stream_completed:
+                run_status = "completed"
             tracing_service.record_step(
                 step_name="chat_stream_completed",
-                status="completed",
-                message="chat streaming completed",
-                payload={"session_id": session_id},
+                status="completed" if stream_completed else "error",
+                message="chat stream reached its terminal state",
+                payload={"session_id": session_id, "commit": eval_data.revision if eval_data else None},
             )
 
             # 流结束后触发评估（此时数据已存储在 chat_service 中）
             try:
                 auto_eval_service = get_auto_evaluation_service()
-                eval_data = get_eval_data(session_id)
-
-                if auto_eval_service and eval_data and eval_data.answer:
+                if auto_eval_service and stream_completed and eval_data.answer:
                     tracing_service.record_step(
                         step_name="auto_eval_triggered",
                         status="info",
@@ -660,7 +668,11 @@ async def chat(request: Request):
                 )
                 import traceback
                 traceback.print_exc()
+        except asyncio.CancelledError:
+            run_status = "cancelled"
+            raise
         finally:
+            clear_eval_data(trace_id)
             if not stream_completed:
                 tracing_service.record_step(
                     step_name="chat_stream_error",
@@ -672,15 +684,20 @@ async def chat(request: Request):
                 {
                     "session_id": session_id,
                     "stream_completed": stream_completed,
+                    "status": run_status,
                     "trace_id": trace_id,
                 }
             )
     
     # 返回流
-    return StreamingResponse(
+    response = StreamingResponse(
         chat_stream_with_eval(),
         media_type="text/plain"
     )
+    if new_conversation:
+        response.set_cookie("reporeaper_conversation", conversation_id, httponly=True, samesite="lax",
+                            secure=request.url.scheme == "https", path="/chat")
+    return response
 
 # ===== Phase 2: 新增评估端点 =====
 

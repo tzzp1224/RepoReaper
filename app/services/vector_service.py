@@ -10,6 +10,7 @@
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -107,6 +108,7 @@ class VectorStore:
         self._bm25: Optional[BM25Okapi] = None
         self._doc_store: List[Document] = []
         self._indexed_files: Set[str] = set()
+        self.index_failures: Dict[str, str] = {}
         
         # 上下文
         self.repo_url: Optional[str] = None
@@ -128,6 +130,7 @@ class VectorStore:
         )
         
         self._initialized = False
+        self._snapshot_index = None
     
     @staticmethod
     def _sanitize_id(session_id: str) -> str:
@@ -173,6 +176,7 @@ class VectorStore:
                     data = json.load(f)
                     self.repo_url = data.get("repo_url")
                     self.global_context = data.get("global_context", {})
+                    self.index_failures = data.get("index_failures", {})
             except Exception as e:
                 logger.warning(f"加载上下文失败: {e}")
         
@@ -185,7 +189,7 @@ class VectorStore:
                     if isinstance(cache, dict) and cache.get("version") == config.cache_version:
                         self._bm25 = cache.get("bm25")
                         self._doc_store = cache.get("doc_store", [])
-                        self._indexed_files = cache.get("indexed_files", set())
+                        self._indexed_files = cache.get("indexed_files", set()) - self.index_failures.keys()
                         cache_loaded = True
                         logger.debug(f"📦 BM25 缓存命中: {len(self._doc_store)} 文档")
             except Exception as e:
@@ -205,7 +209,7 @@ class VectorStore:
         if documents:
             async with self._index_lock:
                 self._doc_store = documents
-                self._indexed_files = {doc.file_path for doc in documents if doc.file_path}
+                self._indexed_files = {doc.file_path for doc in documents if doc.file_path} - self.index_failures.keys()
 
                 tokenized = [self._tokenize(doc.content) for doc in documents]
                 if tokenized:
@@ -297,6 +301,30 @@ class VectorStore:
     async def save_report(self, report: str, language: str = "en") -> None:
         """保存技术报告 (异步，不阻塞事件循环)"""
         await asyncio.to_thread(self._write_report, report, language)
+
+    def snapshot_index(self, manifest: dict):
+        from app.services.repo_index import SnapshotIndex
+
+        current = self._snapshot_index
+        if current is None or current.manifest != manifest:
+            current = self._snapshot_index = SnapshotIndex(self, manifest)
+        return current
+
+    async def publish_snapshot(self, repo_url: str, manifest: dict, previous: dict | None,
+                               context: dict, report: str, language: str) -> None:
+        def publish(state: dict) -> None:
+            if state.get("snapshot_index") != previous:
+                raise RuntimeError("The active snapshot changed while preparing the update")
+            for key in ("artifacts", "index_failures"):
+                state.pop(key, None)
+            state.update(repo_url=repo_url, global_context=context, snapshot_index=manifest,
+                         reports={language: report}, report=report, report_language=language)
+
+        published = await asyncio.to_thread(self._update_context_file, publish, op_name="Publish repository snapshot")
+        if not published:
+            raise RuntimeError("Could not publish repository snapshot")
+        self.repo_url = repo_url
+        self.global_context = context
     
     def _write_report(self, report: str, language: str) -> None:
         """写入报告 (同步，供线程池调用)"""
@@ -545,8 +573,10 @@ class VectorStore:
             self._bm25 = None
             self._doc_store = []
             self._indexed_files = set()
+            self.index_failures = {}
             self.repo_url = None
             self.global_context = {}
+            self._snapshot_index = None
         
         logger.info(f"🗑️ 重置存储: {self.session_id}")
 
@@ -582,7 +612,9 @@ class VectorStore:
     async def add_documents(
         self,
         documents: List[str],
-        metadatas: List[Dict[str, Any]]
+        metadatas: List[Dict[str, Any]],
+        *,
+        rebuild_index: bool = True,
     ) -> int:
         """
         添加文档
@@ -596,6 +628,8 @@ class VectorStore:
         """
         if not documents:
             return 0
+        if len(documents) != len(metadatas):
+            raise ValueError("documents and metadatas must have the same length")
         
         await self.initialize()
         
@@ -605,19 +639,17 @@ class VectorStore:
         embeddings = await embedding_service.embed_batch(documents, show_progress=True)
         
         # 过滤无效的
-        valid_indices = [i for i, emb in enumerate(embeddings) if emb]
-        if not valid_indices:
-            logger.error("所有 Embedding 都失败了")
-            return 0
+        valid_indices = [i for i, emb in enumerate(embeddings[:len(documents)])
+                         if emb and len(emb) == config.embedding_dimensions]
 
         valid_embeddings = [embeddings[i] for i in valid_indices]
 
         async with self._index_lock:
             # 2. 构建 Document 对象（在锁内生成稳定递增 ID）
-            base_idx = len(self._doc_store)
             docs = []
             for offset, i in enumerate(valid_indices):
-                doc_id = f"{metadatas[i].get('file', 'unknown')}_{base_idx + offset}"
+                doc_id = hashlib.sha256(json.dumps([documents[i], metadatas[i]],
+                    sort_keys=True, ensure_ascii=False).encode()).hexdigest()
                 doc = Document(
                     id=doc_id,
                     content=documents[i],
@@ -626,14 +658,40 @@ class VectorStore:
                 docs.append(doc)
 
             # 3. 写入 Qdrant
-            added = await self._qdrant.add_documents(docs, valid_embeddings)
+            added = await self._qdrant.add_documents(docs, valid_embeddings) if docs else 0
+            accepted_ids = getattr(self._qdrant, "last_added_ids", None) if docs else []
+            if accepted_ids is None:
+                # Compatibility for stores implementing the original int API.
+                if added != len(docs):
+                    raise RuntimeError("Partial upsert requires acknowledged document IDs")
+                accepted_ids = [doc.id for doc in docs]
+            accepted_ids = set(accepted_ids)
+            accepted = [doc for doc in docs if doc.id in accepted_ids]
 
             # 4. 更新 BM25 索引 (放入线程池，避免阻塞)
-            self._doc_store.extend(docs)
-            self._indexed_files.update(doc.file_path for doc in docs)
+            by_id = {doc.id: doc for doc in self._doc_store}
+            by_id.update((doc.id, doc) for doc in accepted)
+            self._doc_store = list(by_id.values())
+            for path in {meta.get("file", "") for meta in metadatas}:
+                expected = sum(meta.get("file", "") == path for meta in metadatas)
+                actual = sum(doc.file_path == path for doc in accepted)
+                if actual == expected:
+                    self._indexed_files.add(path)
+                    self.index_failures.pop(path, None)
+                else:
+                    self._indexed_files.discard(path)
+                    self.index_failures[path] = f"indexed {actual}/{expected} submitted chunks"
+            self._update_context_file(lambda state: state.update(index_failures=dict(self.index_failures)),
+                                      op_name="保存索引失败状态")
 
+            if rebuild_index:
+                await asyncio.to_thread(self._rebuild_bm25_sync)
+            return len(accepted)
+
+    async def finalize_deferred_index(self) -> None:
+        """Build and persist BM25 once after a bulk sequence of vector writes."""
+        async with self._index_lock:
             await asyncio.to_thread(self._rebuild_bm25_sync)
-            return added
     
     def _rebuild_bm25_sync(self) -> None:
         """重建 BM25 索引 (同步，用于线程池)"""
@@ -661,30 +719,38 @@ class VectorStore:
         Returns:
             搜索结果列表
         """
-        await self.initialize()
-        
         top_k = top_k or config.default_top_k
+        state = self.load_context() or {}
+        if state.get("snapshot_index"):
+            return await self.snapshot_index(state["snapshot_index"]).search(query, top_k)
+        await self.initialize()
+        query_vector = await self.embed_text(query)
+        return await self.search_index(query, top_k, (self._bm25, self._doc_store), self._qdrant,
+                                       query_vector=query_vector)
+
+    def build_lexical(self, docs: list[Document]):
+        tokens = [self._tokenize(doc.content) for doc in docs]
+        return (BM25Okapi(tokens) if tokens else None, docs)
+
+    async def search_index(self, query, top_k, lexical, backend, *, query_vector, document_ids=None):
         candidate_k = top_k * config.search_oversample
+        bm25, documents = lexical
         
         # 1. 向量搜索
         vector_results: List[SearchResult] = []
-        query_embedding = await self.embed_text(query)
-        
-        if query_embedding and self._qdrant:
-            vector_results = await self._qdrant.search(
-                query_embedding,
-                top_k=candidate_k
-            )
+        if query_vector and backend:
+            scope = {"document_ids": document_ids} if document_ids is not None else {}
+            vector_results = await backend.search(query_vector, top_k=candidate_k, **scope)
         
         # 2. BM25 搜索
         bm25_results: List[SearchResult] = []
-        if self._bm25 and self._doc_store:
+        if bm25 and documents:
             tokens = self._tokenize(query)
             if not tokens:
                 tokens = [""]
             
             try:
-                scores = self._bm25.get_scores(tokens)
+                scores = bm25.get_scores(tokens)
                 top_indices = sorted(
                     range(len(scores)),
                     key=lambda i: scores[i],
@@ -693,7 +759,7 @@ class VectorStore:
                 
                 for idx in top_indices:
                     if scores[idx] > 0:
-                        doc = self._doc_store[idx]
+                        doc = documents[idx]
                         bm25_results.append(SearchResult(
                             document=doc,
                             score=scores[idx],

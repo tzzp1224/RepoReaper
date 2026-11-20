@@ -98,6 +98,12 @@ class RepoMirrorStore:
         filter_config = file_filter or FileFilter()
         return await asyncio.to_thread(self._list_files_at_commit, snapshot, filter_config)
 
+    async def resolve_snapshot(self, repo: GitHubRepo) -> RepoMirrorSnapshot:
+        return await self._get_snapshot(repo, refresh=True)
+
+    def local_git_dir(self, repo: GitHubRepo) -> Path:
+        return self._mirror_git_dir(repo)
+
     async def get_file_content(
         self,
         repo: GitHubRepo,
@@ -107,14 +113,14 @@ class RepoMirrorStore:
         snapshot = await self._get_snapshot(repo)
         return await asyncio.to_thread(self._read_file_at_commit, snapshot, path)
 
-    async def _get_snapshot(self, repo: GitHubRepo) -> RepoMirrorSnapshot:
+    async def _get_snapshot(self, repo: GitHubRepo, *, refresh: bool = False) -> RepoMirrorSnapshot:
         if not self.enabled:
             raise RepoMirrorUnavailable("仓库镜像功能已禁用")
 
         cache_key = repo.full_name.lower()
         snapshot = self._snapshot_cache.get(cache_key)
         now = time.time()
-        if snapshot and now - snapshot.synced_at < self.sync_ttl_seconds:
+        if not refresh and snapshot and now - snapshot.synced_at < self.sync_ttl_seconds:
             return snapshot
 
         acquired = await self._locks.acquire(cache_key, timeout=self.lock_timeout_seconds)
@@ -124,7 +130,7 @@ class RepoMirrorStore:
         try:
             snapshot = self._snapshot_cache.get(cache_key)
             now = time.time()
-            if snapshot and now - snapshot.synced_at < self.sync_ttl_seconds:
+            if not refresh and snapshot and now - snapshot.synced_at < self.sync_ttl_seconds:
                 return snapshot
 
             snapshot = await asyncio.to_thread(self._sync_and_resolve_snapshot, repo)
@@ -170,10 +176,8 @@ class RepoMirrorStore:
 
     def _resolve_branch_head(self, git_dir: Path, default_branch: str) -> str:
         candidate_refs = [
+            f"refs/heads/{default_branch}",
             f"refs/remotes/origin/{default_branch}",
-            f"origin/{default_branch}",
-            default_branch,
-            "HEAD",
         ]
         for ref in candidate_refs:
             result = self._run_git(

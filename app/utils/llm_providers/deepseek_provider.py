@@ -3,11 +3,12 @@
 DeepSeek LLM 提供商实现
 
 DeepSeek API 兼容 OpenAI 协议，因此直接复用 OpenAI SDK。
-支持模型: deepseek-chat, deepseek-coder, deepseek-reasoner 等
 """
 
 from typing import List, AsyncIterator
+from urllib.parse import urlparse
 from openai import AsyncOpenAI
+from app.core.config import DEEPSEEK_DEFAULT_MODEL
 
 from .base import (
     BaseLLMProvider, 
@@ -35,11 +36,17 @@ class DeepSeekProvider(BaseLLMProvider):
         super().__init__(config)
         # 确保使用正确的 base_url
         base_url = config.base_url or DEEPSEEK_DEFAULT_BASE_URL
+        self._is_official_endpoint = urlparse(base_url).hostname == "api.deepseek.com"
         self._client = AsyncOpenAI(
             api_key=config.api_key,
             base_url=base_url,
             timeout=config.timeout
         )
+
+    def _request_options(self, model: str, options: dict) -> dict:
+        if model == DEEPSEEK_DEFAULT_MODEL and self._is_official_endpoint:
+            options["extra_body"] = {"thinking": {"type": "disabled"}, **(options.get("extra_body") or {})}
+        return options
     
     async def chat_completions_create(
         self,
@@ -62,7 +69,7 @@ class DeepSeekProvider(BaseLLMProvider):
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
-            **kwargs
+            **self._request_options(model, kwargs)
         )
         
         choices = [
@@ -112,25 +119,25 @@ class DeepSeekProvider(BaseLLMProvider):
             max_tokens=max_tokens,
             timeout=timeout,
             stream=True,
-            **kwargs
+            **self._request_options(model, kwargs)
         )
         
-        async for chunk in stream:
-            if chunk.choices:
-                delta_content = chunk.choices[0].delta.content or ""
-                choices = [
-                    LLMChoice(
-                        index=0,
-                        delta=LLMMessage(role="assistant", content=delta_content),
-                        finish_reason=chunk.choices[0].finish_reason
+        try:
+            async for chunk in stream:
+                usage = getattr(chunk, "usage", None)
+                choices = [LLMChoice(index=choice.index,
+                                     delta=LLMMessage(role="assistant", content=choice.delta.content or ""),
+                                     finish_reason=choice.finish_reason) for choice in chunk.choices]
+                if choices:
+                    yield LLMResponse(
+                        id=chunk.id, model=chunk.model, choices=choices, created=chunk.created,
+                        usage=LLMUsage(usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
+                        if usage else None,
                     )
-                ]
-                yield LLMResponse(
-                    id=chunk.id,
-                    model=chunk.model,
-                    choices=choices,
-                    created=chunk.created
-                )
+        finally:
+            close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+            if close is not None:
+                await close()
     
     def validate_connection(self) -> bool:
         """验证 API Key 有效性"""
@@ -139,7 +146,7 @@ class DeepSeekProvider(BaseLLMProvider):
 
 def create_deepseek_provider(
     api_key: str,
-    model_name: str = "deepseek-chat",
+    model_name: str = DEEPSEEK_DEFAULT_MODEL,
     base_url: str = None,
     **kwargs
 ) -> DeepSeekProvider:

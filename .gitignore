@@ -6,13 +6,9 @@ __pycache__/
 venv/
 .DS_Store
 data/
-# Vue 构建输出
-#frontend-dist/
+# Vue 本地依赖与构建缓存
 frontend-vue/node_modules/
 frontend-vue/dist/
-
-# 锁文件目录
-data/locks/
 
 # 日志
 logs/
@@ -43,15 +39,7 @@ dist/
 !README.md
 !README_zh.md
 
-QUICKSTART.md
-docs/INTERVIEW_QA.md
-docs/ROADMAP.md
-docs/TECHNICAL_REPORT.md
-evaluation/000_START_HERE.md
 evaluation/golden_dataset.json
-evaluation/HIGH_QUALITY_QUESTIONS.md
-
-evaluation/README_EVALUATION_SYSTEM.md
 evaluation/ragas_eval_dataset.json
 evaluation/sft_data/eval_results.jsonl
 evaluation/sft_data/negative_samples.jsonl
@@ -65,3 +53,9 @@ evaluation/sft_data/evaluated_keys.json
 evaluation/sft_data/needs_review_queue.json
 evaluation/sft_data/review_decisions.json
 evaluation/sft_data/tmp_audit/
+
+# Public benchmark downloads, isolated indexes, model outputs and usage ledgers
+evaluation/benchmark_runs/
+evaluation/benchmark_data/
+evaluation/benchmark_repos/
+!evaluation/benchmark/README.md

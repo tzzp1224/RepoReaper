@@ -4,7 +4,7 @@
 
 支持的供应商:
 - OpenAI (GPT-4, GPT-4o, GPT-3.5-turbo 等)
-- DeepSeek (deepseek-chat, deepseek-coder 等)
+- DeepSeek (deepseek-flash 等)
 - Anthropic (Claude 3.5, Claude 3 等)
 - Google Gemini (gemini-pro, gemini-1.5-pro 等)
 """
